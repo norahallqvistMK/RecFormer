@@ -35,15 +35,6 @@ def load_data(args):
     return train, val, test, item_meta_dict_filted, item2id, id2item
 
 
-tokenizer_glb: RecformerTokenizer = None
-def _par_tokenize_doc(doc):
-    
-    item_id, item_attr = doc
-
-    input_ids, token_type_ids = tokenizer_glb.encode_item(item_attr)
-
-    return item_id, input_ids, token_type_ids
-
 def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
 
     model.eval()
@@ -145,11 +136,32 @@ def train_one_epoch(model, dataloader, optimizer, scheduler, scaler, args):
                 optimizer.step()
                 optimizer.zero_grad()
 
+tokenizer_glb = None  # must be global for child processes
+
+def init_tokenizer(model_name_or_path, finetune_negative_sample_size, item2id_len):
+    global tokenizer_glb
+    config = RecformerConfig.from_pretrained(model_name_or_path)
+    config.max_attr_num = 3
+    config.max_attr_length = 32
+    config.max_item_embeddings = 51
+    config.attention_window = [64] * 12
+    config.max_token_num = 1024
+    config.item_num = item2id_len
+    config.finetune_negative_sample_size = finetune_negative_sample_size
+    tokenizer_glb = RecformerTokenizer.from_pretrained(model_name_or_path, config)
+
+def _par_tokenize_doc(doc):
+    global tokenizer_glb
+    item_id, item_attr = doc
+    print(tokenizer_glb.config)  # should now print correctly
+    input_ids, token_type_ids = tokenizer_glb.encode_item(item_attr)
+    return item_id, input_ids, token_type_ids
+
 def main():
     parser = ArgumentParser()
     # path and file
-    parser.add_argument('--pretrain_ckpt', type=str, default=None, required=True)
-    parser.add_argument('--data_path', type=str, default=None, required=True)
+    parser.add_argument('--pretrain_ckpt', type=str, default= "longformer_ckpt/recformer_seqrec_ckpt.bin")
+    parser.add_argument('--data_path', type=str, default="finetune_data")
     parser.add_argument('--output_dir', type=str, default='checkpoints')
     parser.add_argument('--ckpt', type=str, default='best_model.bin')
     parser.add_argument('--model_name_or_path', type=str, default='allenai/longformer-base-4096')
@@ -215,8 +227,15 @@ def main():
         print(f'[Preprocessor] Use cache: {path_tokenized_items}')
     else:
         print(f'Loading attribute data {path_corpus}')
-        pool = Pool(processes=args.preprocessing_num_workers)
+
+        pool = Pool(
+            processes=args.preprocessing_num_workers,
+            initializer=init_tokenizer,
+            initargs=(args.model_name_or_path, args.finetune_negative_sample_size, len(item2id))
+        )
         pool_func = pool.imap(func=_par_tokenize_doc, iterable=item_meta_dict.items())
+
+    
         doc_tuples = list(tqdm(pool_func, total=len(item_meta_dict), ncols=100, desc=f'[Tokenize] {path_corpus}'))
         tokenized_items = {item2id[item_id]: [input_ids, token_type_ids] for item_id, input_ids, token_type_ids in doc_tuples}
         pool.close()
