@@ -108,10 +108,11 @@ if __name__ == "__main__":
                         "CDs_and_Vinyl": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/CDs_and_Vinyl.json.gz", 
                         "Industrial_and_Scientific": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/Industrial_and_Scientific.json.gz"}
 
-    DATA_LINKS_META = {"Automotive": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Automotive.json.gz",
-                    # "Cell_Phones_and_Accessories": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Cell_Phones_and_Accessories.json.gz",
-                        # "Electronics": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Electronics.json.gz",
-                    "CDs_and_Vinyl": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_CDs_and_Vinyl.json.gz", 
+    DATA_LINKS_META = {
+        # "Automotive": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Automotive.json.gz",
+        #             # "Cell_Phones_and_Accessories": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Cell_Phones_and_Accessories.json.gz",
+        #                 # "Electronics": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Electronics.json.gz",
+        #             "CDs_and_Vinyl": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_CDs_and_Vinyl.json.gz", 
                     "Industrial_and_Scientific": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Industrial_and_Scientific.json.gz"}
 
 

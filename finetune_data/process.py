@@ -24,11 +24,10 @@ class LabelField:
 
 parser = argparse.ArgumentParser()
     
-parser.add_argument('--file_path', default='Industrial_and_Scientific_5.json.gz', help='Processing file path (.gz file).')
-parser.add_argument('--meta_file_path', default='meta_Industrial_and_Scientific.json.gz', help='Processing file path (.gz file).')
-parser.add_argument('--output_path', default='Scientific', help='Output directory')
+parser.add_argument('--file_path', default='../data/01_raw/Industrial_and_Scientific_reviews.jsonl.gz', help='Processing file path (.gz file).')
+parser.add_argument('--meta_file_path', default='../data/01_raw/Industrial_and_Scientific_metadata.jsonl.gz', help='Processing file path (.gz file).')
+parser.add_argument('--output_path', default='.', help='Output directory')
 args = parser.parse_args()
-
 
 def extract_meta_data(path):
     meta_data = dict()

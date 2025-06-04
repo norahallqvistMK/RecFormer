@@ -6,3 +6,7 @@ train.json
 preprocess/
 __pycache__/
 longformer_ckpt/
+smap.json
+test.json
+umap.json
+val.json

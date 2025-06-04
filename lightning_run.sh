@@ -5,11 +5,11 @@ python lightning_pretrain.py \
     --dev_file pretrain_data/dev.json \
     --item_attr_file pretrain_data/meta_data.json \
     --output_dir result/recformer_pretraining \
-    --num_train_epochs 2 \
+    --num_train_epochs 1 \
     --gradient_accumulation_steps 8 \
     --preprocessing_num_workers 8 \
     --dataloader_num_workers 8  \
-    --batch_size 16 \
+    --batch_size 2 \
     --learning_rate 5e-5 \
     --temp 0.05 \
     --device 1 \

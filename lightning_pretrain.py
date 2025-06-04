@@ -52,7 +52,6 @@ def _par_tokenize_doc(doc, tokenizer):
 
     return item_id, input_ids, token_type_ids
 
-
 def main():
     
     args = parser.parse_args()
