@@ -580,6 +580,7 @@ class RecformerForSeqRec(LongformerPreTrainedModel):
         pooler_output = outputs.pooler_output # (bs, hidden_size)
 
         if labels is None:
+            #no candidates are provided to score output against every item 
             return self.similarity_score(pooler_output, candidates)
 
         loss_fct = CrossEntropyLoss()
@@ -593,5 +594,9 @@ class RecformerForSeqRec(LongformerPreTrainedModel):
             logits = self.similarity_score(pooler_output, candidates)
             target = torch.zeros_like(labels, device=labels.device)
             loss = loss_fct(logits, target)
+
+            # if we wanted to return the predicted labeles
+            # predicted_indices = torch.argmax(logits, dim=-1)  # Shape: [batch_size]
+            # predicted_labels = candidates[torch.arange(batch_size), predicted_indices]  # Shape: [batch_size]
 
         return loss
