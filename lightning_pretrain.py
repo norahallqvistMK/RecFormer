@@ -123,7 +123,7 @@ def main():
 
     checkpoint_callback = ModelCheckpoint(save_top_k=5, monitor="accuracy", mode="max", filename="{epoch}-{accuracy:.4f}")
     
-    trainer = Trainer(accelerator="cpu",
+    trainer = Trainer(accelerator="gpu",
                      max_epochs=args.num_train_epochs,
                      devices=args.device,
                      accumulate_grad_batches=args.gradient_accumulation_steps,

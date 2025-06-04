@@ -9,7 +9,7 @@ SEQ_ROOT = 'data/01_raw' # Set your seq data path
 # pretrain_categories = ['Automotive', 'Cell_Phones_and_Accessories', 'Electronics', 'CDs_and_Vinyl']
 pretrain_categories = ['Automotive', 'CDs_and_Vinyl']
 
-pretrain_meta_pathes = [f'{META_ROOT}/meta_{cate}.jsonl.gz' for cate in pretrain_categories]
+pretrain_meta_pathes = [f'{META_ROOT}/{cate}_metadata.jsonl.gz' for cate in pretrain_categories]
 pretrain_seq_pathes = [f'{SEQ_ROOT}/{cate}_reviews.jsonl.gz' for cate in pretrain_categories]
 
 for path in pretrain_meta_pathes+pretrain_seq_pathes:
@@ -63,7 +63,11 @@ for path in tqdm(pretrain_seq_pathes, ncols=100, desc='Check seq asins'):
             if line['asin'] is not None and line['reviewerID'] is not None:
                 seq_asins.add(line['asin'])
 
+
+MAX_ASIN_NUM = 13369  # Set a limit for the number of asins to select
 selected_asins = meta_asins & seq_asins
+selected_asins = selected_asins[:MAX_ASIN_NUM]  # Limit the number of selected asins
+
 print(f'Meta has {len(meta_asins)} Asins.')
 print(f'Seq has {len(seq_asins)} Asins.')
 print(f'{len(selected_asins)} Asins are selected.')

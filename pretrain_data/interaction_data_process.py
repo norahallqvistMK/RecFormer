@@ -63,10 +63,17 @@ dev_sequences, miss_asin_set = extract_interaction(pretrain_seq_pathes[-1], dev_
 training_sequences = post_process(training_sequences)
 dev_sequences = post_process(dev_sequences)
 
+
 print(f'Number of Training Sequences:{len(training_sequences)}, Validation Sequences: {len(dev_sequences)}, Missed asins: {len(miss_asin_set)}')
 
 train_seq = list(training_sequences.values())
 dev_seq = list(dev_sequences.values())
+
+MAX_TRAIN = 2000   # or any number you like
+MAX_DEV = 500     # or any number you like
+
+train_seq_subset = train_seq[:MAX_TRAIN]
+dev_seq_subset = dev_seq[:MAX_DEV]
 
 with open('train.json', 'w') as f:
     json.dump(train_seq, f)
