@@ -4,9 +4,11 @@ import json
 from tqdm import tqdm
 import os
 
-SEQ_ROOT = '../data/01_raw' # Set your seq data path
+SEQ_ROOT = 'data/01_raw' # Set your seq data path
 
-pretrain_categories = ['Automotive', 'Cell_Phones_and_Accessories', 'Electronics', 'CDs_and_Vinyl']
+# pretrain_categories = ['Automotive', 'Cell_Phones_and_Accessories', 'Electronics', 'CDs_and_Vinyl']
+pretrain_categories = ['Automotive', 'CDs_and_Vinyl']
+
 pretrain_seq_pathes = [f'{SEQ_ROOT}/{cate}_reviews.jsonl.gz' for cate in pretrain_categories]
 
 for path in pretrain_seq_pathes:

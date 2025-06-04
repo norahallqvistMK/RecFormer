@@ -7,8 +7,10 @@ from tqdm import tqdm
 import json
 import argparse
 import torch
+from functools import partial
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import ModelCheckpoint
+from functools import partial
 
 from recformer import RecformerForPretraining, RecformerTokenizer, RecformerConfig, LitWrapper
 from collator import PretrainDataCollatorWithPadding
@@ -29,7 +31,7 @@ parser.add_argument('--num_train_epochs', type=int, default=10)
 parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
 parser.add_argument('--dataloader_num_workers', type=int, default=2)
 parser.add_argument('--mlm_probability', type=float, default=0.15)
-parser.add_argument('--batch_size', type=int, default=2)
+parser.add_argument('--batch_size', type=int, default=1)
 parser.add_argument('--learning_rate', type=float, default=5e-5)
 parser.add_argument('--valid_step', type=int, default=2000)
 parser.add_argument('--log_step', type=int, default=2000)
@@ -41,12 +43,12 @@ parser.add_argument('--fix_word_embedding', action='store_true')
 
 
 
-tokenizer_glb: RecformerTokenizer = None
-def _par_tokenize_doc(doc):
+# tokenizer_glb: RecformerTokenizer = None
+def _par_tokenize_doc(doc, tokenizer):
     
     item_id, item_attr = doc
-
-    input_ids, token_type_ids = tokenizer_glb.encode_item(item_attr)
+    # print(f'Tokenizing item {item_id} with attributes {item_attr}')
+    input_ids, token_type_ids = tokenizer.encode_item(item_attr)
 
     return item_id, input_ids, token_type_ids
 
@@ -65,8 +67,9 @@ def main():
     config.max_token_num = 1024
     tokenizer = RecformerTokenizer.from_pretrained(args.model_name_or_path, config)
 
-    global tokenizer_glb
+    # global tokenizer_glb
     tokenizer_glb = tokenizer
+    print(f'Using tokenizer tokenizer_glb: {tokenizer_glb}')
 
     # preprocess corpus
     path_corpus = Path(args.item_attr_file)
@@ -82,7 +85,8 @@ def main():
         print(f'Loading attribute data {path_corpus}')
         item_attrs = json.load(open(path_corpus))
         pool = Pool(processes=args.preprocessing_num_workers)
-        pool_func = pool.imap(func=_par_tokenize_doc, iterable=item_attrs.items())
+        tokenize_func = partial(_par_tokenize_doc, tokenizer=tokenizer)
+        pool_func = pool.imap(func=tokenize_func, iterable=item_attrs.items())
         doc_tuples = list(tqdm(pool_func, total=len(item_attrs), ncols=100, desc=f'[Tokenize] {path_corpus}'))
         tokenized_items = {item_id: [input_ids, token_type_ids] for item_id, input_ids, token_type_ids in doc_tuples}
         pool.close()
@@ -119,7 +123,7 @@ def main():
 
     checkpoint_callback = ModelCheckpoint(save_top_k=5, monitor="accuracy", mode="max", filename="{epoch}-{accuracy:.4f}")
     
-    trainer = Trainer(accelerator="gpu",
+    trainer = Trainer(accelerator="cpu",
                      max_epochs=args.num_train_epochs,
                      devices=args.device,
                      accumulate_grad_batches=args.gradient_accumulation_steps,

@@ -28,7 +28,7 @@ def download_gzip_file(url_dict, category, log_every_n_seconds=10):
     suffix = "metadata" if "meta" in url else "reviews"
 
     output_path = (
-        Path(__file__).parents[1] / "data" / "01_raw" / f"{category}_{suffix}.jsonl.gz"
+        Path(__file__).parents[0] / "data" / "01_raw" / f"{category}_{suffix}.jsonl.gz"
     )
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
@@ -103,13 +103,13 @@ if __name__ == "__main__":
 
     DATA_LINKS_REVIEWS = {
         "Automotive": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/Automotive.json.gz",
-                        "Cell_Phones_and_Accessories": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/Cell_Phones_and_Accessories.json.gz",
-                            "Electronics": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/Electronics.json.gz",
+                        # "Cell_Phones_and_Accessories": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/Cell_Phones_and_Accessories.json.gz",
+                        #     "Electronics": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/Electronics.json.gz",
                         "CDs_and_Vinyl": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/categoryFiles/CDs_and_Vinyl.json.gz"}
 
     DATA_LINKS_META = {"Automotive": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Automotive.json.gz",
-                    "Cell_Phones_and_Accessories": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Cell_Phones_and_Accessories.json.gz",
-                        "Electronics": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Electronics.json.gz",
+                    # "Cell_Phones_and_Accessories": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Cell_Phones_and_Accessories.json.gz",
+                        # "Electronics": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_Electronics.json.gz",
                     "CDs_and_Vinyl": "https://mcauleylab.ucsd.edu/public_datasets/data/amazon_v2/metaFiles2/meta_CDs_and_Vinyl.json.gz"}
 
     for cat in DATA_LINKS_REVIEWS.keys():
