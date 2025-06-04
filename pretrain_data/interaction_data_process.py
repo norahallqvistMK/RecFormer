@@ -4,13 +4,10 @@ import json
 from tqdm import tqdm
 import os
 
-SEQ_ROOT = '' # Set your seq data path
+SEQ_ROOT = '../data/01_raw' # Set your seq data path
 
-pretrain_categories = ['Automotive', 'Cell_Phones_and_Accessories', \
-              'Clothing_Shoes_and_Jewelry', 'Electronics', 'Grocery_and_Gourmet_Food', 'Home_and_Kitchen', \
-              'Movies_and_TV', 'CDs_and_Vinyl']
-
-pretrain_seq_pathes = [f'{SEQ_ROOT}/{cate}_5.json.gz' for cate in pretrain_categories]
+pretrain_categories = ['Automotive', 'Cell_Phones_and_Accessories', 'Electronics', 'CDs_and_Vinyl']
+pretrain_seq_pathes = [f'{SEQ_ROOT}/{cate}_reviews.jsonl.gz' for cate in pretrain_categories]
 
 for path in pretrain_seq_pathes:
     if not os.path.exists(path):
