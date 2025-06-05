@@ -622,10 +622,13 @@ def main():
     with open(os.path.join("clustering_results", "meta_data_per_cluster_label.json"), 'w') as f:
         json.dump(meta_data_per_cluster_label, f, indent=2)
 
-    cluster_descriptions = {}
     for k, sequences  in meta_data_per_cluster_label.items():
         cluster_descriptions[k] = get_cluster_description(sequences)
         print(f"Cluster {k} description: {cluster_descriptions[k]}")
+
+    cluster_descriptions = {int(k): v for k, v in cluster_descriptions.items()}
+    with open(os.path.join("clustering_results", "cluster_descriptions.json"), 'w') as f:
+        json.dump(cluster_descriptions, f, indent=2)
 
 
 if __name__ == "__main__":
