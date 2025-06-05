@@ -303,6 +303,8 @@ def cluster_sequences(model, test_data, dataloader, device, k_min=2, k_max=20,
     
     print("Starting clustering analysis...")
     print("="*50)
+
+    os.makedirs(output_dir, exist_ok=True)
     
     # Extract embeddings
     embeddings, sequence_ids = extract_embeddings(model, dataloader, device)
@@ -322,8 +324,9 @@ def cluster_sequences(model, test_data, dataloader, device, k_min=2, k_max=20,
     save_clustering_results(clustering_results, sequence_ids, output_dir)
     print(f"Clustering results saved to {output_dir}")
 
-    # with open(os.path.join(output_dir, f'items_in_cluster_{optimal_k}.json'), 'w') as f:
-    #     json.dump(datapoints_in_optimal_cluster, f, indent=4)
+    datapoints_in_optimal_cluster = {int(k): v for k, v in datapoints_in_optimal_cluster.items()}
+    with open(os.path.join("clustering_results", "matapoints_per_cluster_label.json"), 'w') as f:
+        json.dump(datapoints_in_optimal_cluster, f, indent=2)
     
     # Visualize clusters for optimal k
     if visualize:
@@ -428,7 +431,7 @@ def main():
     parser.add_argument('--gradient_accumulation_steps', type=int, default=8)
     parser.add_argument('--finetune_negative_sample_size', type=int, default=1000)
     parser.add_argument('--metric_ks', nargs='+', type=int, default=[10, 50], help='ks for Metric@k')
-    parser.add_argument('--batch_size', type=int, default=16)
+    parser.add_argument('--batch_size', type=int, default=1)
     parser.add_argument('--learning_rate', type=float, default=5e-5)
     parser.add_argument('--weight_decay', type=float, default=0)
     parser.add_argument('--warmup_steps', type=int, default=100)
@@ -528,13 +531,16 @@ def main():
 
     print(clustering_results)
 
-    get_meta_data_per_cluster_label = get_meta_data_per_cluster(
+    meta_data_per_cluster_label = get_meta_data_per_cluster(
         datapoints_in_clusters, 
         item_meta_dict, 
         id2item
     )
-    print(get_meta_data_per_cluster_label)
-        
+    print(meta_data_per_cluster_label)
+    meta_data_per_cluster_label = {int(k): v for k, v in meta_data_per_cluster_label.items()}
+    with open(os.path.join("clustering_results", "meta_data_per_cluster_label.json"), 'w') as f:
+        json.dump(meta_data_per_cluster_label, f, indent=2)
+
 
 if __name__ == "__main__":
     main()

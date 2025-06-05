@@ -4,7 +4,7 @@ import json
 from tqdm import tqdm
 import os
 
-SEQ_ROOT = 'data/01_raw' # Set your seq data path
+SEQ_ROOT = '../data/01_raw' # Set your seq data path
 
 # pretrain_categories = ['Automotive', 'Cell_Phones_and_Accessories', 'Electronics', 'CDs_and_Vinyl']
 pretrain_categories = ['Automotive', 'CDs_and_Vinyl']
@@ -69,11 +69,11 @@ print(f'Number of Training Sequences:{len(training_sequences)}, Validation Seque
 train_seq = list(training_sequences.values())
 dev_seq = list(dev_sequences.values())
 
-MAX_TRAIN = 2000   # or any number you like
-MAX_DEV = 500     # or any number you like
+# MAX_TRAIN = 2000   # or any number you like
+# MAX_DEV = 500     # or any number you like
 
-train_seq_subset = train_seq[:MAX_TRAIN]
-dev_seq_subset = dev_seq[:MAX_DEV]
+# train_seq_subset = train_seq[:MAX_TRAIN]
+# dev_seq_subset = dev_seq[:MAX_DEV]
 
 with open('train.json', 'w') as f:
     json.dump(train_seq, f)

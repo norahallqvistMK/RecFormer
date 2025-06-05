@@ -3,8 +3,8 @@ import json
 from tqdm import tqdm
 import os
 
-META_ROOT = 'data/01_raw' # Set your meta data path
-SEQ_ROOT = 'data/01_raw' # Set your seq data path
+META_ROOT = '../data/01_raw' # Set your meta data path
+SEQ_ROOT = '../data/01_raw' # Set your seq data path
 
 # pretrain_categories = ['Automotive', 'Cell_Phones_and_Accessories', 'Electronics', 'CDs_and_Vinyl']
 pretrain_categories = ['Automotive', 'CDs_and_Vinyl']
@@ -64,9 +64,9 @@ for path in tqdm(pretrain_seq_pathes, ncols=100, desc='Check seq asins'):
                 seq_asins.add(line['asin'])
 
 
-MAX_ASIN_NUM = 13369  # Set a limit for the number of asins to select
+# MAX_ASIN_NUM = 13369  # Set a limit for the number of asins to select
 selected_asins = meta_asins & seq_asins
-selected_asins = selected_asins[:MAX_ASIN_NUM]  # Limit the number of selected asins
+# selected_asins = list(selected_asins)[:MAX_ASIN_NUM]  # Limit the number of selected asins
 
 print(f'Meta has {len(meta_asins)} Asins.')
 print(f'Seq has {len(seq_asins)} Asins.')

@@ -10,7 +10,7 @@ def train_and_save_decision_tree(cluster_data, max_features=50, max_depth=4, fil
     for cluster_label, users in cluster_data.items():
         for user_items in users:
             combined_text = " ".join(
-                f"{item.get('title', '')} {item.get('brand', '')} {item.get('description', '')}"
+                f"{item.get('title', '')} {item.get('brand', '')} {item.get('category', '')}"
                 for item in user_items
             )
             texts.append(combined_text)
@@ -40,5 +40,15 @@ def train_and_save_decision_tree(cluster_data, max_features=50, max_depth=4, fil
     plt.savefig(filename, dpi=300)
     plt.close()  # prevent display in some environments
 
+# cluster_data = {
+#     "0": [
+#         [{"title": "Item A1", "brand": "Brand X", "description": "Description of item A1"}],
+#         [{"title": "Item A2", "brand": "Brand Y", "description": "Description of item A2"}]
+#     ],
+#     "1": [
+#         [{"title": "Item B1", "brand": "Brand Z", "description": "Description of item B1"}],
+#         [{"title": "Item B2", "brand": "Brand W", "description": "Description of item B2"}]
+#     ]
+# }
 
-train_and_save_decision_tree(cluster_data, filename="cluster_tree.png")
+# train_and_save_decision_tree(cluster_data, filename="cluster_tree.png")
