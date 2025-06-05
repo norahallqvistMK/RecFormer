@@ -209,10 +209,10 @@ if __name__ == "__main__":
     inputs = tokenizer(items1)
     print(inputs)
     print(tokenizer.convert_ids_to_tokens(inputs['input_ids']))
-    print(len(inputs['input_ids']))
+    # print(len(inputs['input_ids']))
 
-    inputs = tokenizer([items1, items2])
-    print(inputs)
+    # inputs = tokenizer([items1, items2])
+    # print(inputs)
     
 
         
