@@ -9,6 +9,7 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import json
 import os
+import openai
 
 import os
 import json
@@ -20,12 +21,14 @@ from argparse import ArgumentParser
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast
 
+
 from utils import read_json, AverageMeterSet, Ranker
 from optimization import create_optimizer_and_scheduler
 from recformer import RecformerModel, RecformerForSeqRec, RecformerTokenizer, RecformerConfig
 from collator import FinetuneDataCollatorWithPadding, EvalDataCollatorWithPadding
 from dataloader import RecformerTrainDataset, RecformerEvalDataset
-
+import dotenv
+dotenv.load_dotenv()
 
 
 import torch
@@ -407,6 +410,84 @@ def _par_tokenize_doc(doc):
     return item_id, input_ids, token_type_ids
 
 
+def get_cluster_description(user_sequence_in_cluster: List) -> str:
+    """
+    Generate a cluster description based on user interaction sequences.
+    
+    Args:
+        user_sequence_in_cluster: List of user interaction sequences in the cluster
+        
+    Returns:
+        str: Generated cluster description
+        
+    Raises:
+        Exception: If API call fails or environment variables are missing
+    """
+    
+    # Validate environment variables
+    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
+    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+    
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY environment variable is required")
+    
+    # Initialize OpenAI client
+    client_kwargs = {"api_key": OPENAI_API_KEY}
+    if OPENAI_BASE_URL:
+        client_kwargs["base_url"] = OPENAI_BASE_URL
+        
+    client = openai.OpenAI(**client_kwargs)
+
+    # Prepare the task prompt
+    task = f"""
+    You are an expert at persona generation and user behavior analysis.
+    
+    You are given a list of interaction sequences for users in the same cluster.
+    Each sequence represents the items/products a user has interacted with over time.
+    
+    Your task is to:
+    1. Analyze the common patterns across all user sequences
+    2. Identify shared interests, preferences, and behaviors
+    3. Generate a concise cluster description (2-3 sentences) that captures the essence of this user group
+    4. Focus on what makes this cluster unique and distinguishable from other user groups
+    
+    User Interaction Sequences in Cluster:
+    {user_sequence_in_cluster}
+    
+    Please provide only the cluster description without additional explanation.
+    """
+
+    try:
+        # Make API call
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {
+                    "role": "system", 
+                    "content": "You are an expert data analyst specializing in user behavior clustering and persona generation."
+                },
+                {
+                    "role": "user", 
+                    "content": task
+                }
+            ],
+            temperature=0.7,
+            max_tokens=200,
+            top_p=0.9
+        )
+        
+        # Extract and return the description
+        cluster_description = response.choices[0].message.content.strip()
+        return cluster_description
+        
+    except openai.APIError as e:
+        raise Exception(f"OpenAI API error: {e}")
+    except openai.RateLimitError as e:
+        raise Exception(f"OpenAI rate limit exceeded: {e}")
+    except openai.AuthenticationError as e:
+        raise Exception(f"OpenAI authentication failed: {e}")
+    except Exception as e:
+        raise Exception(f"Failed to generate cluster description: {e}")
 
 def main():
 
@@ -540,6 +621,11 @@ def main():
     meta_data_per_cluster_label = {int(k): v for k, v in meta_data_per_cluster_label.items()}
     with open(os.path.join("clustering_results", "meta_data_per_cluster_label.json"), 'w') as f:
         json.dump(meta_data_per_cluster_label, f, indent=2)
+
+    cluster_descriptions = {}
+    for k, sequences  in meta_data_per_cluster_label.items():
+        cluster_descriptions[k] = get_cluster_description(sequences)
+        print(f"Cluster {k} description: {cluster_descriptions[k]}")
 
 
 if __name__ == "__main__":
