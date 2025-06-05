@@ -11,3 +11,4 @@ test.json
 umap.json
 val.json
 .env
+clustering_results/

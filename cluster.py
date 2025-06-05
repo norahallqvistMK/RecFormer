@@ -11,7 +11,9 @@ import json
 import os
 import openai
 
-import os
+import os            
+import umap
+
 import json
 import torch
 from tqdm import tqdm
@@ -47,7 +49,38 @@ from typing import Dict, List, Tuple, Optional
 import warnings
 warnings.filterwarnings('ignore')
 
-
+def make_json_safe(obj):
+    """
+    Recursively convert an object to be JSON serializable.
+    Handles numpy arrays, numpy scalars, and nested structures.
+    """
+    if obj is None or isinstance(obj, (bool, int, float, str)):
+        return obj
+    
+    # Handle numpy types
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    
+    # Handle lists
+    elif isinstance(obj, list):
+        return [make_json_safe(item) for item in obj]
+    
+    # Handle dictionaries
+    elif isinstance(obj, dict):
+        return {str(k): make_json_safe(v) for k, v in obj.items()}
+    
+    # Handle tuples and sets
+    elif isinstance(obj, (tuple, set)):
+        return [make_json_safe(item) for item in obj]
+    
+    # Fallback to string representation
+    else:
+        return str(obj)
+    
 def perform_kmeans_clustering(embeddings, k_range, random_state=42):
     """Perform K-means clustering with different k values"""
     clustering_results = {}
@@ -109,20 +142,31 @@ def analyze_clustering_results(clustering_results, output_dir=None):
     return optimal_k
 
 def visualize_clusters(embeddings, cluster_labels, k, method='tsne', output_dir=None):
-    """Visualize clusters in 2D using t-SNE or PCA"""
+    """Visualize clusters in 2D using t-SNE, PCA, or UMAP"""
+    embeddings_2d = None
     
-    # Reduce dimensionality for visualization
     if method == 'tsne':
         reducer = TSNE(n_components=2, random_state=42, perplexity=min(30, len(embeddings)//4))
         embeddings_2d = reducer.fit_transform(embeddings)
-    else:  # PCA
+    
+    elif method == 'pca':
         reducer = PCA(n_components=2, random_state=42)
         embeddings_2d = reducer.fit_transform(embeddings)
     
+    elif method == 'umap':
+        try:
+            reducer = umap.UMAP(n_components=2, random_state=42)
+            embeddings_2d = reducer.fit_transform(embeddings)
+        except ImportError:
+            raise ImportError("UMAP is not installed. Install it with `pip install umap-learn`.")
+    
+    else:
+        raise ValueError("Invalid method. Choose from 'tsne', 'pca', or 'umap'.")
+
     # Create scatter plot
     plt.figure(figsize=(12, 8))
     scatter = plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], 
-                         c=cluster_labels, cmap='tab10', alpha=0.7)
+                          c=cluster_labels, cmap='tab10', alpha=0.7)
     plt.colorbar(scatter, label='Cluster')
     plt.title(f'K-means Clustering Visualization (k={k}) - {method.upper()}')
     plt.xlabel(f'{method.upper()} Component 1')
@@ -344,63 +388,6 @@ def get_cluster_description(
             raise
         raise Exception(f"Failed to generate cluster description: {e}")
 
-# Modified extract_embeddings function to also collect predictions
-def extract_embeddings_with_predictions(model, dataloader, device, max_sequences=None):
-    """
-    Extract sequence embeddings and predictions from the model using the dataloader.
-    
-    Args:
-        model: The RecformerForSeqRec model
-        dataloader: DataLoader containing evaluation data
-        device: Device to run inference on
-        max_sequences: Maximum number of sequences to process (None for all)
-    
-    Returns:
-        embeddings: numpy array of sequence embeddings
-        sequence_ids: list of sequence identifiers
-        predictions: list of predicted item IDs for each sequence
-    """
-    model.eval()
-    embeddings = []
-    sequence_ids = []
-    predictions = []
-    
-    with torch.no_grad():
-        for i, (batch, labels) in enumerate(tqdm(dataloader, desc="Extracting embeddings and predictions")):
-            if max_sequences and len(embeddings) >= max_sequences:
-                break
-                
-            # Move batch to device
-            for k, v in batch.items():
-                batch[k] = v.to(device)
-
-            # Get sequence embeddings (before final classification layer)
-            outputs = model.longformer(**batch)
-            seq_embeddings = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs.last_hidden_state[:, 0, :]
-            
-            # Get predictions by running inference without labels
-            logits = model(**batch)  # This returns logits for all items
-            predicted_indices = torch.argmax(logits, dim=-1)  # Get the item with highest score
-            
-            embeddings.append(seq_embeddings.cpu().numpy())
-            predictions.extend(predicted_indices.cpu().numpy().tolist())
-            
-            # Create sequence IDs
-            batch_size = seq_embeddings.shape[0]
-            batch_ids = [len(sequence_ids) + j for j in range(batch_size)]
-            sequence_ids.extend(batch_ids)
-    
-    embeddings = np.vstack(embeddings)
-    
-    if max_sequences:
-        embeddings = embeddings[:max_sequences]
-        sequence_ids = sequence_ids[:max_sequences]
-        predictions = predictions[:max_sequences]
-    
-    print(f"Extracted {embeddings.shape[0]} sequence embeddings of dimension {embeddings.shape[1]}")
-    print(f"Collected {len(predictions)} predictions")
-    return embeddings, sequence_ids, predictions
-
 def get_prediction_metadata_per_cluster(
     predictions_per_cluster: Dict[int, List[int]],
     item_meta_dict: Dict[int, Dict],
@@ -418,14 +405,19 @@ def get_prediction_metadata_per_cluster(
         prediction_metadata_per_cluster: dict {cluster_label: [meta1, meta2, ...]}
     """
     prediction_metadata_per_cluster = {}
+    prediction_item_name_per_cluster = {}
     for cluster_label, predicted_items in predictions_per_cluster.items():
         cluster_metadata = []
+        cluster_item_names = []
         for item_id in predicted_items:
             item_name = id2item[item_id]
+            cluster_item_names.append(item_name)
+
             item_meta = item_meta_dict[item_name]
             cluster_metadata.append(item_meta)
         prediction_metadata_per_cluster[cluster_label] = cluster_metadata
-    return prediction_metadata_per_cluster
+        prediction_item_name_per_cluster[cluster_label] = cluster_item_names 
+    return prediction_metadata_per_cluster, prediction_item_name_per_cluster
 
 
 def get_predictions_per_cluster(clustering_results: Dict[int, Dict], prediction_ids: List[int], k: int) -> Dict[int, List[int]]:
@@ -436,9 +428,101 @@ def get_predictions_per_cluster(clustering_results: Dict[int, Dict], prediction_
     cluster_to_predictions = {}
 
     for label in np.unique(labels):
-        cluster_to_predictions[label] = [seq_id for seq_id, lbl in zip(prediction_ids, labels) if lbl == label]
+        cluster_to_predictions[label] = [pred_id for pred_id, lbl in zip(prediction_ids, labels) if lbl == label]
 
     return cluster_to_predictions
+
+def extract_embeddings(model, dataloader, device, max_sequences=None, cache_dir='clustering_results'):
+    """
+    Extract sequence embeddings from the model using the dataloader.
+    Caches results to avoid recomputation.
+    
+    Args:
+        model: The RecformerForSeqRec model
+        dataloader: DataLoader containing evaluation data
+        device: Device to run inference on
+        max_sequences: Maximum number of sequences to process (None for all)
+        cache_dir: Directory to save/load cached embeddings
+    
+    Returns:
+        embeddings: numpy array of sequence embeddings
+        sequence_ids: list of sequence identifiers
+        predictions: list of model predictions (optional)
+    """
+    os.makedirs(cache_dir, exist_ok=True)
+    
+    # Define cache file paths
+    cache_suffix = f"_max{max_sequences}" if max_sequences else "_all"
+    embeddings_path = os.path.join(cache_dir, f'embeddings{cache_suffix}.npy')
+    sequence_ids_path = os.path.join(cache_dir, f'sequence_ids{cache_suffix}.json')
+    predictions_path = os.path.join(cache_dir, f'predictions{cache_suffix}.npy')
+    
+    # Check if cached files exist
+    if (os.path.exists(embeddings_path) and 
+        os.path.exists(sequence_ids_path) and 
+        os.path.exists(predictions_path)):
+        
+        print(f"Loading cached embeddings from {cache_dir}")
+        embeddings = np.load(embeddings_path)
+        with open(sequence_ids_path, 'r') as f:
+            sequence_ids = json.load(f)
+        predictions = np.load(predictions_path)
+        
+        print(f"Loaded {embeddings.shape[0]} cached sequence embeddings of dimension {embeddings.shape[1]}")
+        return embeddings, sequence_ids, predictions
+    
+    print("Cached embeddings not found. Extracting embeddings...")
+    
+    model.eval()
+    embeddings = []
+    sequence_ids = []
+    predictions = []
+    
+    with torch.no_grad():
+        for i, (batch, labels) in enumerate(tqdm(dataloader, desc="Extracting embeddings")):
+            if max_sequences and len(embeddings) >= max_sequences:
+                break
+                
+            # Move batch to device
+            for k, v in batch.items():
+                batch[k] = v.to(device)
+
+            # Get sequence embeddings and predictions
+            outputs = model.longformer(**batch)
+            
+            # Use the pooler output or last hidden state as sequence embedding
+            seq_embeddings = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs.last_hidden_state[:, 0, :]
+            
+            # Get model predictions (logits or final output)
+            logits = model(**batch)
+            pred_values = torch.argmax(logits, dim=-1)  # Get the item with highest score
+
+            
+            embeddings.append(seq_embeddings.cpu().numpy())
+            predictions.append(pred_values.cpu().numpy()[0]) #list containing a single number
+            
+            # Create sequence IDs
+            batch_size = seq_embeddings.shape[0]
+            batch_ids = [len(sequence_ids) + j for j in range(batch_size)]
+            sequence_ids.extend(batch_ids)
+    
+    embeddings = np.vstack(embeddings)
+    predictions = np.vstack(predictions)
+    
+    if max_sequences:
+        embeddings = embeddings[:max_sequences]
+        predictions = predictions[:max_sequences]
+        sequence_ids = sequence_ids[:max_sequences]
+    
+    # Save to cache
+    print(f"Saving embeddings to cache in {cache_dir}")
+    np.save(embeddings_path, embeddings)
+    with open(sequence_ids_path, 'w') as f:
+        json.dump(sequence_ids, f, indent=2)
+    np.save(predictions_path, predictions)
+    
+    print(f"Extracted and cached {embeddings.shape[0]} sequence embeddings of dimension {embeddings.shape[1]}")
+    return embeddings, sequence_ids, predictions
 
 def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max=20, 
                                      output_dir='clustering_results', visualize=True):
@@ -468,7 +552,7 @@ def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max
     os.makedirs(output_dir, exist_ok=True)
     
     # Extract embeddings and predictions
-    embeddings, sequence_ids, predictions = extract_embeddings_with_predictions(model, dataloader, device)
+    embeddings, sequence_ids, predictions = extract_embeddings(model, dataloader, device)
     print(f"Extracted {embeddings.shape[0]} embeddings and {len(predictions)} predictions")
     
     # Perform K-means clustering with different k values
@@ -486,13 +570,8 @@ def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max
     print(f"Clustering results saved to {output_dir}")
 
     # Save data points
-    predictions_per_cluster = {int(k): v for k, v in predictions_per_cluster.items()}
+    predictions_per_cluster = make_json_safe(predictions_per_cluster)
     with open(os.path.join(output_dir, "item_pred_per_cluster_label.json"), 'w') as f:
-        json.dump(predictions_per_cluster, f, indent=2)
-    
-    # Save predictions per cluster
-    predictions_per_cluster = {int(k): v for k, v in predictions_per_cluster.items()}
-    with open(os.path.join(output_dir, "predictions_per_cluster.json"), 'w') as f:
         json.dump(predictions_per_cluster, f, indent=2)
     
     # Visualize clusters for optimal k
@@ -501,6 +580,7 @@ def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max
         optimal_labels = clustering_results[optimal_k]['labels']
         visualize_clusters(embeddings, optimal_labels, optimal_k, method='tsne', output_dir=output_dir)
         visualize_clusters(embeddings, optimal_labels, optimal_k, method='pca', output_dir=output_dir)
+        visualize_clusters(embeddings, optimal_labels, optimal_k, method='umap', output_dir=output_dir)
 
     # Print detailed statistics for optimal k
     get_cluster_statistics(clustering_results, optimal_k)
@@ -580,7 +660,7 @@ def main():
         print(f'[Preprocessor] Use cache: {path_tokenized_items}')
     else:
         print(f'Loading attribute data {path_corpus}')
-        pool = Pool(processes=args.preprocessing_num_workers, initializer=init_tokenizer, initargs=(args.model_name_or_path,))
+        pool = Pool(processes=args.preprocessing_num_workers, initializer=init_tokenizer, initargs=(args.model_name_or_path,args.finetune_negative_sample_size, len(item2id)))
         pool_func = pool.imap(func=_par_tokenize_doc, iterable=item_meta_dict.items())
         doc_tuples = list(tqdm(pool_func, total=len(item_meta_dict), ncols=100, desc=f'[Tokenize] {path_corpus}'))
         tokenized_items = {item2id[item_id]: [input_ids, token_type_ids] for item_id, input_ids, token_type_ids in doc_tuples}
@@ -631,19 +711,22 @@ def main():
     )
 
     print("Clustering results:", clustering_results)
-    print("Predictions per cluster:", predictions_per_cluster)
 
 
     # Get metadata for predicted items (new functionality)
-    prediction_metadata_per_cluster = get_prediction_metadata_per_cluster(
+    prediction_metadata_per_cluster, prediction_item_names_per_cluster = get_prediction_metadata_per_cluster(
         predictions_per_cluster,
         item_meta_dict,
         id2item
     )
 
-    prediction_metadata_per_cluster = {int(k): v for k, v in prediction_metadata_per_cluster.items()}
+    prediction_metadata_per_cluster = make_json_safe(prediction_metadata_per_cluster)
     with open(os.path.join("clustering_results", "prediction_metadata_per_cluster.json"), 'w') as f:
         json.dump(prediction_metadata_per_cluster, f, indent=2)
+
+    prediction_item_names_per_cluster = make_json_safe(prediction_item_names_per_cluster)
+    with open(os.path.join("clustering_results", "prediction_item_names_per_cluster.json"), 'w') as f:
+        json.dump(prediction_item_names_per_cluster, f, indent=2)
 
     # Generate cluster descriptions for predictions
     prediction_cluster_descriptions = {}
@@ -655,7 +738,7 @@ def main():
         print(f"Cluster {k} (predictions) description: {prediction_cluster_descriptions[k]}")
 
     # Save descriptions        
-    prediction_cluster_descriptions = {int(k): v for k, v in prediction_cluster_descriptions.items()}
+    prediction_cluster_descriptions = {int(k): list(v) for k, v in prediction_cluster_descriptions.items()}
     with open(os.path.join("clustering_results", "prediction_cluster_descriptions.json"), 'w') as f:
         json.dump(prediction_cluster_descriptions, f, indent=2)
 
