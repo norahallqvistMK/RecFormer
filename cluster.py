@@ -48,118 +48,6 @@ import warnings
 warnings.filterwarnings('ignore')
 
 
-
-def get_meta_data_per_cluster(
-    data_points_per_cluster: Dict[int, List[List[int]]],
-    item_meta_dict: Dict[int, Dict],
-    id2item: Dict[int, str]
-) -> Dict[int, List[Dict]]:
-    """
-    Given clustered item ID sequences, return metadata per cluster.
-
-    Args:
-        data_points_per_cluster: dict {cluster_label: [[item_id1, item_id2, ...], ...]}
-        item_meta_dict: dict mapping item names to metadata
-        id2item: dict mapping item IDs to item names
-
-    Returns:
-        meta_data_per_cluster_label: dict {cluster_label: [item_meta1, item_meta2, ...]}
-    """
-    meta_data_per_cluster_label = {}
-    for cluster_label, item_sequences in data_points_per_cluster.items():
-        meta_data_per_cluster_label[cluster_label] = []
-        for item_sequence in item_sequences:
-            meta_data = []
-            for item_id in item_sequence:
-                item_name = id2item[item_id]
-                item_meta = item_meta_dict.get(item_name, {})
-                meta_data.append(item_meta)
-            meta_data_per_cluster_label[cluster_label].append(meta_data)
-    return meta_data_per_cluster_label
-
-def get_data_points_per_cluster(sequence_ids_per_cluster: Dict[int, List], dataset: RecformerEvalDataset) -> Dict[int, List[str]]:
-    """
-    Given clustering results and sequence IDs, return a mapping of cluster labels to sequence IDs.
-
-    Args:
-        clustering_results: dict from perform_kmeans_clustering
-        sequence_ids: list of sequence identifiers corresponding to embeddings
-        k: number of clusters to extract
-
-    Returns:
-        cluster_to_sequences: dict {cluster_label: [sequence_id1, sequence_id2, ...]}
-    """
-    data_points_per_cluster = {}
-    for cluster_label, sequence_ids in sequence_ids_per_cluster.items():
-        data_points_per_cluster[cluster_label] = get_data_points_from_sequence_ids(sequence_ids, dataset)
-    return data_points_per_cluster
-
-def get_data_points_from_sequence_ids(sequence_ids: List[str], dataset: RecformerEvalDataset):
-    data_points = []
-    for seq_id in sequence_ids:  # e.g. "seq_3" -> 3
-        data_points.append(dataset[seq_id][0])
-    return data_points
-
-def get_sequence_ids_per_cluster(clustering_results: Dict[int, Dict], sequence_ids: List[int], k: int) -> Dict[int, List[int]]:
-    if k not in clustering_results:
-        raise ValueError(f"K={k} not found in clustering results")
-
-    labels = clustering_results[k]['labels']
-    cluster_to_sequences = {}
-
-    for label in np.unique(labels):
-        cluster_to_sequences[label] = [seq_id for seq_id, lbl in zip(sequence_ids, labels) if lbl == label]
-
-    return cluster_to_sequences
-
-def extract_embeddings(model, dataloader, device, max_sequences=None):
-    """
-    Extract sequence embeddings from the model using the dataloader.
-    
-    Args:
-        model: The RecformerForSeqRec model
-        dataloader: DataLoader containing evaluation data
-        device: Device to run inference on
-        max_sequences: Maximum number of sequences to process (None for all)
-    
-    Returns:
-        embeddings: numpy array of sequence embeddings
-        sequence_ids: list of sequence identifiers
-    """
-    model.eval()
-    embeddings = []
-    sequence_ids = []
-    
-    with torch.no_grad():
-        for i, (batch, labels) in enumerate(tqdm(dataloader, desc="Extracting embeddings")):
-            if max_sequences and len(embeddings) >= max_sequences:
-                break
-                
-            # Move batch to device
-            for k, v in batch.items():
-                batch[k] = v.to(device)
-
-            # Get sequence embeddings (before final classification layer)
-            outputs = model.longformer(**batch)
-            # Use the pooler output or last hidden state as sequence embedding
-            seq_embeddings = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs.last_hidden_state[:, 0, :]
-            
-            embeddings.append(seq_embeddings.cpu().numpy())
-            # Create sequence IDs
-            batch_size = seq_embeddings.shape[0]
-            batch_ids = [len(sequence_ids) + j for j in range(batch_size)]
-            sequence_ids.extend(batch_ids)
-    
-    embeddings = np.vstack(embeddings)
-    
-    if max_sequences:
-        embeddings = embeddings[:max_sequences]
-        sequence_ids = sequence_ids[:max_sequences]
-    
-    print(f"Extracted {embeddings.shape[0]} sequence embeddings of dimension {embeddings.shape[1]}")
-    return embeddings, sequence_ids
-
-
 def perform_kmeans_clustering(embeddings, k_range, random_state=42):
     """Perform K-means clustering with different k values"""
     clustering_results = {}
@@ -284,65 +172,6 @@ def get_cluster_statistics(clustering_results, k):
         percentage = count / len(labels) * 100
         print(f"  Cluster {label}: {count} sequences ({percentage:.2f}%)")
 
-def cluster_sequences(model, test_data, dataloader, device, k_min=2, k_max=20, 
-                     output_dir='clustering_results', visualize=True):
-    """
-    Main function to perform clustering analysis on sequence embeddings
-    
-    Args:
-        model: RecformerForSeqRec model
-        dataloader: DataLoader containing test data
-        device: Device to run model on
-        k_min: Minimum number of clusters
-        k_max: Maximum number of clusters
-        output_dir: Directory to save results
-        visualize: Whether to create visualizations
-    
-    Returns:
-        clustering_results: Dictionary containing clustering results for each k
-        embeddings: Extracted embeddings
-        sequence_ids: Sequence identifiers
-    """
-    
-    print("Starting clustering analysis...")
-    print("="*50)
-
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Extract embeddings
-    embeddings, sequence_ids = extract_embeddings(model, dataloader, device)
-    print(f"Extracted {embeddings.shape[0]} embeddings of dimension {embeddings.shape[1]}")
-    
-    # Perform K-means clustering with different k values
-    k_range = range(k_min, k_max + 1)
-    clustering_results = perform_kmeans_clustering(embeddings, k_range)
-    
-    # Analyze results
-    optimal_k = analyze_clustering_results(clustering_results, output_dir=output_dir)
-
-    sequence_ids_per_cluster = get_sequence_ids_per_cluster(clustering_results, sequence_ids, optimal_k)
-    datapoints_in_optimal_cluster = get_data_points_per_cluster(sequence_ids_per_cluster, test_data)
-    
-    # Save results
-    save_clustering_results(clustering_results, sequence_ids, output_dir)
-    print(f"Clustering results saved to {output_dir}")
-
-    datapoints_in_optimal_cluster = {int(k): v for k, v in datapoints_in_optimal_cluster.items()}
-    with open(os.path.join("clustering_results", "matapoints_per_cluster_label.json"), 'w') as f:
-        json.dump(datapoints_in_optimal_cluster, f, indent=2)
-    
-    # Visualize clusters for optimal k
-    if visualize:
-        print(f"Visualizing clusters for optimal k={optimal_k}")
-        optimal_labels = clustering_results[optimal_k]['labels']
-        visualize_clusters(embeddings, optimal_labels, optimal_k, method='tsne', output_dir=output_dir)
-        visualize_clusters(embeddings, optimal_labels, optimal_k, method='pca', output_dir=output_dir)
-
-    # Print detailed statistics for optimal k
-    get_cluster_statistics(clustering_results, optimal_k)
-    
-    return clustering_results, embeddings, sequence_ids, datapoints_in_optimal_cluster
-
 def load_data(args):
 
     train = read_json(os.path.join(args.data_path, args.train_file), True)
@@ -409,58 +238,75 @@ def _par_tokenize_doc(doc):
     input_ids, token_type_ids = tokenizer_glb.encode_item(item_attr)
     return item_id, input_ids, token_type_ids
 
-
-def get_cluster_description(user_sequence_in_cluster: List) -> str:
+def get_cluster_description(
+    items_in_cluster: List, 
+    model: str = "gpt-4",
+    temperature: float = 0.7,
+    max_tokens: int = 200,
+    timeout: int = 30
+) -> str:
     """
     Generate a cluster description based on user interaction sequences.
     
     Args:
-        user_sequence_in_cluster: List of user interaction sequences in the cluster
+        items_in_cluster: List of user items in the cluster
+        model: OpenAI model to use (default: "gpt-4")
+        temperature: Sampling temperature (default: 0.7)
+        max_tokens: Maximum tokens in response (default: 200)
+        timeout: Request timeout in seconds (default: 30)
         
     Returns:
         str: Generated cluster description
         
     Raises:
-        Exception: If API call fails or environment variables are missing
+        ValueError: If inputs are invalid or environment variables are missing
+        Exception: If API call fails
     """
+    # Validate inputs
+    if not items_in_cluster:
+        raise ValueError("Items list cannot be empty")
     
     # Validate environment variables
-    OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    
-    if not OPENAI_API_KEY:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
         raise ValueError("OPENAI_API_KEY environment variable is required")
     
     # Initialize OpenAI client
-    client_kwargs = {"api_key": OPENAI_API_KEY}
-    if OPENAI_BASE_URL:
-        client_kwargs["base_url"] = OPENAI_BASE_URL
-        
+    client_kwargs = {"api_key": api_key}
+    base_url = os.getenv("OPENAI_BASE_URL")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+    
     client = openai.OpenAI(**client_kwargs)
 
-    # Prepare the task prompt
-    task = f"""
-    You are an expert at persona generation and user behavior analysis.
+    # Truncate items if too many to avoid token limits
+    max_items = 50
+    display_items = items_in_cluster[:max_items]
+    truncated_note = f"\n\n[Note: Showing first {max_items} of {len(items_in_cluster)} items]" if len(items_in_cluster) > max_items else ""
     
-    You are given a list of interaction sequences for users in the same cluster.
-    Each sequence represents the items/products a user has interacted with over time.
+    # Build the analysis prompt
+    task = f"""
+    You are an expert in analyzing item clusters and generating descriptive summaries.
+    
+    You are given a list of items from users in the same cluster.
+    Each item is described by a set of characteristics, such as item name, category, and other attributes.
     
     Your task is to:
-    1. Analyze the common patterns across all user sequences
-    2. Identify shared interests, preferences, and behaviors
-    3. Generate a concise cluster description (2-3 sentences) that captures the essence of this user group
-    4. Focus on what makes this cluster unique and distinguishable from other user groups
+    1. Analyze the common patterns across all items
+    2. Identify shared characteristics and themes among the items
+    3. Generate a concise cluster description (2-3 sentences) that captures the essence of the grouped items
+    4. Focus on what makes this cluster unique and distinguishable from other item groups
     
-    User Interaction Sequences in Cluster:
-    {user_sequence_in_cluster}
+    Items in Cluster:
+    {display_items}{truncated_note}
     
     Please provide only the cluster description without additional explanation.
     """
 
     try:
-        # Make API call
+        # Make API call with timeout
         response = client.chat.completions.create(
-            model="gpt-4",
+            model=model,
             messages=[
                 {
                     "role": "system", 
@@ -471,24 +317,198 @@ def get_cluster_description(user_sequence_in_cluster: List) -> str:
                     "content": task
                 }
             ],
-            temperature=0.7,
-            max_tokens=200,
-            top_p=0.9
+            temperature=temperature,
+            max_tokens=max_tokens,
+            top_p=0.9,
+            timeout=timeout
         )
         
-        # Extract and return the description
-        cluster_description = response.choices[0].message.content.strip()
-        return cluster_description
+        # Extract and validate response
+        if not response.choices or not response.choices[0].message.content:
+            raise Exception("No valid response generated from API")
+            
+        description = response.choices[0].message.content.strip()
         
-    except openai.APIError as e:
-        raise Exception(f"OpenAI API error: {e}")
-    except openai.RateLimitError as e:
-        raise Exception(f"OpenAI rate limit exceeded: {e}")
+        return description
+        
     except openai.AuthenticationError as e:
         raise Exception(f"OpenAI authentication failed: {e}")
+    except openai.RateLimitError as e:
+        raise Exception(f"OpenAI rate limit exceeded: {e}")
+    except openai.APITimeoutError as e:
+        raise Exception(f"OpenAI API timeout: {e}")
+    except openai.APIError as e:
+        raise Exception(f"OpenAI API error: {e}")
     except Exception as e:
+        if "OpenAI" in str(e):
+            raise
         raise Exception(f"Failed to generate cluster description: {e}")
 
+# Modified extract_embeddings function to also collect predictions
+def extract_embeddings_with_predictions(model, dataloader, device, max_sequences=None):
+    """
+    Extract sequence embeddings and predictions from the model using the dataloader.
+    
+    Args:
+        model: The RecformerForSeqRec model
+        dataloader: DataLoader containing evaluation data
+        device: Device to run inference on
+        max_sequences: Maximum number of sequences to process (None for all)
+    
+    Returns:
+        embeddings: numpy array of sequence embeddings
+        sequence_ids: list of sequence identifiers
+        predictions: list of predicted item IDs for each sequence
+    """
+    model.eval()
+    embeddings = []
+    sequence_ids = []
+    predictions = []
+    
+    with torch.no_grad():
+        for i, (batch, labels) in enumerate(tqdm(dataloader, desc="Extracting embeddings and predictions")):
+            if max_sequences and len(embeddings) >= max_sequences:
+                break
+                
+            # Move batch to device
+            for k, v in batch.items():
+                batch[k] = v.to(device)
+
+            # Get sequence embeddings (before final classification layer)
+            outputs = model.longformer(**batch)
+            seq_embeddings = outputs.pooler_output if hasattr(outputs, 'pooler_output') else outputs.last_hidden_state[:, 0, :]
+            
+            # Get predictions by running inference without labels
+            logits = model(**batch)  # This returns logits for all items
+            predicted_indices = torch.argmax(logits, dim=-1)  # Get the item with highest score
+            
+            embeddings.append(seq_embeddings.cpu().numpy())
+            predictions.extend(predicted_indices.cpu().numpy().tolist())
+            
+            # Create sequence IDs
+            batch_size = seq_embeddings.shape[0]
+            batch_ids = [len(sequence_ids) + j for j in range(batch_size)]
+            sequence_ids.extend(batch_ids)
+    
+    embeddings = np.vstack(embeddings)
+    
+    if max_sequences:
+        embeddings = embeddings[:max_sequences]
+        sequence_ids = sequence_ids[:max_sequences]
+        predictions = predictions[:max_sequences]
+    
+    print(f"Extracted {embeddings.shape[0]} sequence embeddings of dimension {embeddings.shape[1]}")
+    print(f"Collected {len(predictions)} predictions")
+    return embeddings, sequence_ids, predictions
+
+def get_prediction_metadata_per_cluster(
+    predictions_per_cluster: Dict[int, List[int]],
+    item_meta_dict: Dict[int, Dict],
+    id2item: Dict[int, str]
+) -> Dict[int, List[Dict]]:
+    """
+    Get metadata for predicted items in each cluster.
+    
+    Args:
+        predictions_per_cluster: dict {cluster_label: [predicted_item1, predicted_item2, ...]}
+        item_meta_dict: dict mapping item names to metadata
+        id2item: dict mapping item IDs to item names
+    
+    Returns:
+        prediction_metadata_per_cluster: dict {cluster_label: [meta1, meta2, ...]}
+    """
+    prediction_metadata_per_cluster = {}
+    for cluster_label, predicted_items in predictions_per_cluster.items():
+        cluster_metadata = []
+        for item_id in predicted_items:
+            item_name = id2item[item_id]
+            item_meta = item_meta_dict[item_name]
+            cluster_metadata.append(item_meta)
+        prediction_metadata_per_cluster[cluster_label] = cluster_metadata
+    return prediction_metadata_per_cluster
+
+
+def get_predictions_per_cluster(clustering_results: Dict[int, Dict], prediction_ids: List[int], k: int) -> Dict[int, List[int]]:
+    if k not in clustering_results:
+        raise ValueError(f"K={k} not found in clustering results")
+
+    labels = clustering_results[k]['labels']
+    cluster_to_predictions = {}
+
+    for label in np.unique(labels):
+        cluster_to_predictions[label] = [seq_id for seq_id, lbl in zip(prediction_ids, labels) if lbl == label]
+
+    return cluster_to_predictions
+
+def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max=20, 
+                                     output_dir='clustering_results', visualize=True):
+    """
+    Main function to perform clustering analysis on sequence embeddings and collect predictions
+    
+    Args:
+        model: RecformerForSeqRec model
+        dataloader: DataLoader containing test data
+        device: Device to run model on
+        k_min: Minimum number of clusters
+        k_max: Maximum number of clusters
+        output_dir: Directory to save results
+        visualize: Whether to create visualizations
+    
+    Returns:
+        clustering_results: Dictionary containing clustering results for each k
+        embeddings: Extracted embeddings
+        sequence_ids: Sequence identifiers
+        predictions: Predicted items for each sequence
+        predictions_per_cluster: Predictions per cluster
+    """
+    
+    print("Starting clustering analysis with predictions...")
+    print("="*50)
+
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Extract embeddings and predictions
+    embeddings, sequence_ids, predictions = extract_embeddings_with_predictions(model, dataloader, device)
+    print(f"Extracted {embeddings.shape[0]} embeddings and {len(predictions)} predictions")
+    
+    # Perform K-means clustering with different k values
+    k_range = range(k_min, k_max + 1)
+    clustering_results = perform_kmeans_clustering(embeddings, k_range)
+    
+    # Analyze results
+    optimal_k = analyze_clustering_results(clustering_results, output_dir=output_dir)
+
+    # Get sequence IDs and data points per cluster
+    predictions_per_cluster = get_predictions_per_cluster(clustering_results, predictions, optimal_k)
+        
+    # Save results
+    save_clustering_results(clustering_results, sequence_ids, output_dir)
+    print(f"Clustering results saved to {output_dir}")
+
+    # Save data points
+    predictions_per_cluster = {int(k): v for k, v in predictions_per_cluster.items()}
+    with open(os.path.join(output_dir, "item_pred_per_cluster_label.json"), 'w') as f:
+        json.dump(predictions_per_cluster, f, indent=2)
+    
+    # Save predictions per cluster
+    predictions_per_cluster = {int(k): v for k, v in predictions_per_cluster.items()}
+    with open(os.path.join(output_dir, "predictions_per_cluster.json"), 'w') as f:
+        json.dump(predictions_per_cluster, f, indent=2)
+    
+    # Visualize clusters for optimal k
+    if visualize:
+        print(f"Visualizing clusters for optimal k={optimal_k}")
+        optimal_labels = clustering_results[optimal_k]['labels']
+        visualize_clusters(embeddings, optimal_labels, optimal_k, method='tsne', output_dir=output_dir)
+        visualize_clusters(embeddings, optimal_labels, optimal_k, method='pca', output_dir=output_dir)
+
+    # Print detailed statistics for optimal k
+    get_cluster_statistics(clustering_results, optimal_k)
+    
+    return (clustering_results, embeddings, sequence_ids, predictions, predictions_per_cluster)
+
+
+# Modified main function
 def main():
 
     parser = ArgumentParser()
@@ -598,10 +618,10 @@ def main():
     model.init_item_embedding(item_embeddings)
 
     model.to(args.device) # send item embeddings to device
-
-    clustering_results, embeddings, sequence_ids, datapoints_in_clusters = cluster_sequences(
+    
+    # Replace the original clustering call with:
+    (clustering_results, embeddings, sequence_ids, predictions, predictions_per_cluster) = cluster_sequences_with_predictions(
         model=model,
-        test_data=test_data,
         dataloader=test_loader,
         device=args.device, 
         k_min=2,
@@ -610,26 +630,34 @@ def main():
         visualize=True
     )
 
-    print(clustering_results)
+    print("Clustering results:", clustering_results)
+    print("Predictions per cluster:", predictions_per_cluster)
 
-    meta_data_per_cluster_label = get_meta_data_per_cluster(
-        datapoints_in_clusters, 
-        item_meta_dict, 
+
+    # Get metadata for predicted items (new functionality)
+    prediction_metadata_per_cluster = get_prediction_metadata_per_cluster(
+        predictions_per_cluster,
+        item_meta_dict,
         id2item
     )
-    print(meta_data_per_cluster_label)
-    meta_data_per_cluster_label = {int(k): v for k, v in meta_data_per_cluster_label.items()}
-    with open(os.path.join("clustering_results", "meta_data_per_cluster_label.json"), 'w') as f:
-        json.dump(meta_data_per_cluster_label, f, indent=2)
 
-    cluster_descriptions = {}
-    for k, sequences  in meta_data_per_cluster_label.items():
-        cluster_descriptions[k] = get_cluster_description(sequences)
-        print(f"Cluster {k} description: {cluster_descriptions[k]}")
+    prediction_metadata_per_cluster = {int(k): v for k, v in prediction_metadata_per_cluster.items()}
+    with open(os.path.join("clustering_results", "prediction_metadata_per_cluster.json"), 'w') as f:
+        json.dump(prediction_metadata_per_cluster, f, indent=2)
 
-        with open(os.path.join("clustering_results", "cluster_descriptions.json"), 'w') as f:
-            json.dump(cluster_descriptions, f, indent=2)
+    # Generate cluster descriptions for predictions
+    prediction_cluster_descriptions = {}
+    
+    for k in prediction_metadata_per_cluster.keys():
+        # Description based on predicted items
+        predicted_sequences = prediction_metadata_per_cluster[k]
+        prediction_cluster_descriptions[k] = get_cluster_description(predicted_sequences)
+        print(f"Cluster {k} (predictions) description: {prediction_cluster_descriptions[k]}")
 
+    # Save descriptions        
+    prediction_cluster_descriptions = {int(k): v for k, v in prediction_cluster_descriptions.items()}
+    with open(os.path.join("clustering_results", "prediction_cluster_descriptions.json"), 'w') as f:
+        json.dump(prediction_cluster_descriptions, f, indent=2)
 
 if __name__ == "__main__":
     main()
