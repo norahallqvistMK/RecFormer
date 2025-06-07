@@ -151,7 +151,8 @@ transaction_field = LabelField()
 sequences = defaultdict(list)
 
 for k, v in raw_sequences.items():
-    sequences[CC_field.get_id(k)] = [transaction_field.get_id(ele) for ele in v]
+    if len(raw_sequences[k]) > 3: 
+        sequences[CC_field.get_id(k)] = [transaction_field.get_id(ele) for ele in v]
 
 train_dict = dict()
 dev_dict = dict()

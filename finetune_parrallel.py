@@ -7,6 +7,7 @@ from pathlib import Path
 from argparse import ArgumentParser
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast
+import torch.nn as nn
 
 from pytorch_lightning import seed_everything
 
@@ -16,6 +17,9 @@ from recformer import RecformerModel, RecformerForSeqRec, RecformerTokenizer, Re
 from collator import FinetuneDataCollatorWithPadding, EvalDataCollatorWithPadding
 from dataloader import RecformerTrainDataset, RecformerEvalDataset
 
+def get_base_model(model):
+    """Helper function to get the base model (unwrapped from DataParallel)"""
+    return model.module if isinstance(model, nn.DataParallel) else model
 
 def load_data(args):
 
@@ -35,8 +39,87 @@ def load_data(args):
     return train, val, test, item_meta_dict_filted, item2id, id2item
 
 
-def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
+def encode_all_items_multi_gpu(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
+    """
+    Encode items using multiple GPUs to prevent CUDA OOM
+    """
+    model.eval()
+    
+    # Get available GPUs
+    num_gpus = torch.cuda.device_count()
+    print(f"Using {num_gpus} GPUs for item encoding")
+    
+    if num_gpus <= 1:
+        # Fallback to single GPU if only one available
+        return encode_all_items_single_gpu(model, tokenizer, tokenized_items, args)
+    
+    # Wrap model with DataParallel for multi-GPU inference
+    model.to(args.device)
+    if not isinstance(model, nn.DataParallel):
+        model = nn.DataParallel(model)
+    
+    items = sorted(list(tokenized_items.items()), key=lambda x: x[0])
+    items = [ele[1] for ele in items]
+    
+    item_embeddings = []
+    
+    # Adjust batch size for multi-GPU (multiply by number of GPUs)
+    effective_batch_size = args.batch_size * num_gpus
+    
+    with torch.no_grad():
+        for i in tqdm(range(0, len(items), effective_batch_size), ncols=100, desc=f'Encode all items (Multi-GPU: {num_gpus})'):
+            
+            item_batch = [[item] for item in items[i:i+effective_batch_size]]
+            
+            if len(item_batch) == 0:
+                continue
+                
+            inputs = tokenizer.batch_encode(item_batch, encode_item=False)
+            
+            for k, v in inputs.items():
+                inputs[k] = torch.LongTensor(v).to(args.device)
+            
+            try:
+                outputs = model(**inputs)
+                item_embeddings.append(outputs.pooler_output.detach().cpu())  # Move to CPU immediately
+                
+                # Clear GPU cache periodically
+                if i % (effective_batch_size * 10) == 0:
+                    torch.cuda.empty_cache()
+                    
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    print(f"CUDA OOM at batch {i}, reducing batch size and retrying...")
+                    torch.cuda.empty_cache()
+                    
+                    # Process this batch with smaller chunks
+                    chunk_size = max(1, len(item_batch) // (num_gpus * 2))
+                    for j in range(0, len(item_batch), chunk_size):
+                        chunk = item_batch[j:j+chunk_size]
+                        if len(chunk) == 0:
+                            continue
+                            
+                        chunk_inputs = tokenizer.batch_encode(chunk, encode_item=False)
+                        for k, v in chunk_inputs.items():
+                            chunk_inputs[k] = torch.LongTensor(v).to(args.device)
+                        
+                        chunk_outputs = model(**chunk_inputs)
+                        item_embeddings.append(chunk_outputs.pooler_output.detach().cpu())
+                        
+                    torch.cuda.empty_cache()
+                else:
+                    raise e
+    
+    # Concatenate all embeddings and move back to original device
+    item_embeddings = torch.cat(item_embeddings, dim=0).to(args.device)
+    
+    return item_embeddings
 
+
+def encode_all_items_single_gpu(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
+    """
+    Original single GPU encoding with memory optimization
+    """
     model.eval()
 
     items = sorted(list(tokenized_items.items()), key=lambda x: x[0])
@@ -45,7 +128,7 @@ def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, token
     item_embeddings = []
 
     with torch.no_grad():
-        for i in tqdm(range(0, len(items), args.batch_size), ncols=100, desc='Encode all items'):
+        for i in tqdm(range(0, len(items), args.batch_size), ncols=100, desc='Encode all items (Single GPU)'):
 
             item_batch = [[item] for item in items[i:i+args.batch_size]]
 
@@ -54,13 +137,51 @@ def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, token
             for k, v in inputs.items():
                 inputs[k] = torch.LongTensor(v).to(args.device)
 
-            outputs = model(**inputs)
+            try:
+                outputs = model(**inputs)
+                item_embeddings.append(outputs.pooler_output.detach().cpu())  # Move to CPU immediately
+                
+                # Clear cache every 50 batches
+                if i % (args.batch_size * 50) == 0:
+                    torch.cuda.empty_cache()
+                    
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    print(f"CUDA OOM at batch {i}, clearing cache and retrying with smaller batch...")
+                    torch.cuda.empty_cache()
+                    
+                    # Retry with half batch size
+                    half_batch_size = max(1, len(item_batch) // 2)
+                    for j in range(0, len(item_batch), half_batch_size):
+                        mini_batch = item_batch[j:j+half_batch_size]
+                        if len(mini_batch) == 0:
+                            continue
+                            
+                        mini_inputs = tokenizer.batch_encode(mini_batch, encode_item=False)
+                        for k, v in mini_inputs.items():
+                            mini_inputs[k] = torch.LongTensor(v).to(args.device)
+                        
+                        mini_outputs = model(**mini_inputs)
+                        item_embeddings.append(mini_outputs.pooler_output.detach().cpu())
+                        
+                    torch.cuda.empty_cache()
+                else:
+                    raise e
 
-            item_embeddings.append(outputs.pooler_output.detach())
-
-    item_embeddings = torch.cat(item_embeddings, dim=0)#.cpu()
+    # Concatenate and move back to device
+    item_embeddings = torch.cat(item_embeddings, dim=0).to(args.device)
 
     return item_embeddings
+
+
+def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
+    """
+    Main function that chooses between single and multi-GPU encoding
+    """
+    if torch.cuda.device_count() > 1 and args.use_multi_gpu:
+        return encode_all_items_multi_gpu(model, tokenizer, tokenized_items, args)
+    else:
+        return encode_all_items_single_gpu(model, tokenizer, tokenized_items, args)
 
 
 def eval(model, dataloader, args):
@@ -109,10 +230,16 @@ def train_one_epoch(model, dataloader, optimizer, scheduler, scaler, args):
         else:
             loss = model(**batch)
 
+        # Handle DataParallel loss (already averaged across GPUs)
+        if isinstance(model, nn.DataParallel):
+            # DataParallel automatically averages the loss across GPUs
+            loss = loss.mean() if loss.dim() > 0 else loss
+
         if args.gradient_accumulation_steps > 1:
             loss = loss / args.gradient_accumulation_steps
 
         if args.fp16:
+            print("LOSSSS", loss)
             scaler.scale(loss).backward()
         else:
             loss.backward()
@@ -191,11 +318,17 @@ def main():
     parser.add_argument('--fix_word_embedding', action='store_true')
     parser.add_argument('--verbose', type=int, default=3)
     
+    # Multi-GPU options
+    parser.add_argument('--use_multi_gpu', action='store_true', help='Use multiple GPUs for item encoding')
+    
 
     args = parser.parse_args()
+    
     print(args)
+    print(f"Available GPUs: {torch.cuda.device_count()}")
+    
     seed_everything(42)
-    args.device = torch.device('cuda:{}'.format(args.device)) if args.device>=0 else torch.device('cpu')
+    args.device = torch.device('cuda:0') if args.device>=0 else torch.device('cpu')
 
     train, val, test, item_meta_dict, item2id, id2item = load_data(args)
 
@@ -268,22 +401,32 @@ def main():
     pretrain_ckpt = torch.load(args.pretrain_ckpt)
     model.load_state_dict(pretrain_ckpt, strict=False)
     model.to(args.device)
+    
+    # Move model to primary device first
+    if args.use_multi_gpu and torch.cuda.device_count() > 1:
+        print(f"Using {torch.cuda.device_count()} GPUs for training")
+        model = nn.DataParallel(model)  # Then wrap with DataParallel
 
     if args.fix_word_embedding:
         print('Fix word embeddings.')
-        for param in model.longformer.embeddings.word_embeddings.parameters():
+        base_model = get_base_model(model)
+        for param in base_model.longformer.embeddings.word_embeddings.parameters():
             param.requires_grad = False
 
     path_item_embeddings = dir_preprocess / f'item_embeddings_{path_corpus.name}'
     if path_item_embeddings.exists():
-        print(f'[Item Embeddings] Use cache: {path_tokenized_items}')
+        print(f'[Item Embeddings] Use cache: {path_item_embeddings}')
     else:
         print(f'Encoding items.')
-        item_embeddings = encode_all_items(model.longformer, tokenizer, tokenized_items, args)
+        base_model = get_base_model(model)
+        item_embeddings = encode_all_items(base_model.longformer, tokenizer, tokenized_items, args)
         torch.save(item_embeddings, path_item_embeddings)
-    
+            
     item_embeddings = torch.load(path_item_embeddings)
-    model.init_item_embedding(item_embeddings)
+       
+    # Initialize item embeddings properly for DataParallel
+    base_model = get_base_model(model)
+    base_model.init_item_embedding(item_embeddings)
 
     model.to(args.device) # send item embeddings to device
 
@@ -303,8 +446,9 @@ def main():
 
     for epoch in range(args.num_train_epochs):
 
-        item_embeddings = encode_all_items(model.longformer, tokenizer, tokenized_items, args)
-        model.init_item_embedding(item_embeddings)
+        base_model = get_base_model(model)
+        item_embeddings = encode_all_items(base_model.longformer, tokenizer, tokenized_items, args)
+        base_model.init_item_embedding(item_embeddings)
 
         train_one_epoch(model, train_loader, optimizer, scheduler, scaler, args)
         
@@ -316,15 +460,20 @@ def main():
                 print('Save the best model.')
                 best_target = dev_metrics['NDCG@10']
                 patient = 5
-                torch.save(model.state_dict(), path_ckpt)
+                
+                base_model = get_base_model(model)
+                torch.save(base_model.state_dict(), path_ckpt)
             
             else:
                 patient -= 1
                 if patient == 0:
                     break
-    
+
     print('Load best model in stage 1.')
-    model.load_state_dict(torch.load(path_ckpt))
+    checkpoint = torch.load(path_ckpt)
+    base_model = get_base_model(model)
+    base_model.load_state_dict(checkpoint)
+
 
     patient = 3
 
@@ -340,15 +489,20 @@ def main():
                 print('Save the best model.')
                 best_target = dev_metrics['NDCG@10']
                 patient = 3
-                torch.save(model.state_dict(), path_ckpt)
+                base_model = get_base_model(model)
+                torch.save(base_model.state_dict(), path_ckpt)
             
             else:
                 patient -= 1
                 if patient == 0:
                     break
 
+
+    # Final test
     print('Test with the best checkpoint.')  
-    model.load_state_dict(torch.load(path_ckpt))
+    checkpoint = torch.load(path_ckpt)
+    base_model = get_base_model(model)
+    base_model.load_state_dict(checkpoint)
     test_metrics = eval(model, test_loader, args)
     print(f'Test set: {test_metrics}')
                
