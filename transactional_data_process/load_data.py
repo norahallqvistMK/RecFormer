@@ -7,7 +7,6 @@ import os
 import json
 from pathlib import Path
 
-
 def save_metadata_to_json(metadata, output_path):
     dir_name = os.path.dirname(output_path)
     if dir_name:
@@ -16,7 +15,7 @@ def save_metadata_to_json(metadata, output_path):
         json.dump(metadata, f, indent=4)
     print(f"Metadata saved to {output_path}")
 
-def get_amt_bins(df: pd.DataFrame, number_bins: int = 10000, min_amt: int = 0, max_amt: int = 10000):
+def get_amt_bins(df: pd.DataFrame, number_bins: int = 1000, min_amt: int = 0, max_amt: int = 10000):
     """
     Create a mapping of amount bins to token IDs.
     
@@ -52,13 +51,19 @@ def get_amt_bins(df: pd.DataFrame, number_bins: int = 10000, min_amt: int = 0, m
         bin_labels.append(label)
 
     token_dict = {label: f"amt_bin_{idx}" for idx, label in enumerate(bin_labels)}
-    save_metadata_to_json(token_dict, '../data/amt_bins.json')
+    save_metadata_to_json(token_dict, 'data/amt_bins.json')
     
     return amount_bins, bin_labels
 
 
 def save_raw_data(save_dir: str):
-    """Reads raw data from Hugging Face and saves it locally as CSV files."""
+    """
+    Reads raw data from Hugging Face and saves it locally as CSV files.
+    Skips downloading if the files already exist.
+
+    Args:
+        save_dir (str): Directory to save the raw data.
+    """
     splits = {'train': 'credit_card_transaction_train.csv', 'test': 'credit_card_transaction_test.csv'}
     base_url = "hf://datasets/pointe77/credit-card-transaction/"
 
@@ -67,65 +72,91 @@ def save_raw_data(save_dir: str):
         os.makedirs(save_dir)
         print(f"Directory '{save_dir}' created.")
 
+    # Define file paths
+    train_path = os.path.join(save_dir, 'credit_card_transaction_train_raw.csv')
+    test_path = os.path.join(save_dir, 'credit_card_transaction_test_raw.csv')
+
+    # Check if files already exist
+    if os.path.exists(train_path) and os.path.exists(test_path):
+        print(f"Raw data already exists at '{train_path}' and '{test_path}'. Skipping download.")
+        return
+
     # Read the data
+    print("Downloading raw data from Hugging Face...")
     df_train = pd.read_csv(base_url + splits["train"])
     df_test = pd.read_csv(base_url + splits["test"])
 
     # Save raw data
-    train_path = os.path.join(save_dir, 'credit_card_transaction_train_raw.csv')
-    test_path = os.path.join(save_dir, 'credit_card_transaction_test_raw.csv')
     df_train.to_csv(train_path, index=False)
     df_test.to_csv(test_path, index=False)
 
-    print(f"Raw data saved as '{train_path}' and '{test_path}'")
+    print(f"Raw data saved as '{train_path}' and '{test_path}'.")
 
 
 def fit_global_label_encoder(train_path: str, test_path: str, save_dir: str = '../data'):
     """
     Fit label encoder on combined train and test data for transaction signatures.
-    
+    If the encoder and bins already exist, load and return them instead of recomputing.
+
     Parameters:
     - train_path: Path to training data
     - test_path: Path to test data
     - save_dir: Directory to save the fitted encoder
-    
+
     Returns:
     - Fitted LabelEncoder and amount bins information
     """
+    # Define paths for saved encoder and bins
+    encoder_path = os.path.join(save_dir, 'transaction_type_encoder.pkl')
+    bins_path = os.path.join(save_dir, 'amt_bins_info.pkl')
+
+    # Check if the encoder and bins already exist
+    if os.path.exists(encoder_path) and os.path.exists(bins_path):
+        print("Encoder and bins already exist. Loading from disk...")
+        with open(encoder_path, 'rb') as f:
+            le = pickle.load(f)
+        with open(bins_path, 'rb') as f:
+            amt_bins, bin_labels = pickle.load(f)
+        print(f"Loaded encoder from {encoder_path}")
+        print(f"Loaded amount bins info from {bins_path}")
+        return le, amt_bins, bin_labels
+
+    # If not, fit the encoder and compute bins
     print("Fitting global label encoder on combined dataset...")
-    
+
     # Read both datasets
     df_train = pd.read_csv(train_path)
     df_test = pd.read_csv(test_path)
-    
+
     # Combine datasets for fitting
     df_combined = pd.concat([df_train, df_test], ignore_index=True)
-    
+
     # Get amount bins from combined data
     amt_bins, bin_labels = get_amt_bins(df_combined)
-    
+
     # Process combined data to get all possible transaction signatures
     df_combined_processed = preprocess_data_without_encoding(df_combined, amt_bins, bin_labels)
-    
+
     # Fit label encoder on all unique transaction signatures
     le = LabelEncoder()
     all_signatures = df_combined_processed["transaction_signature"].unique()
     le.fit(all_signatures)
-    
+
+    # Ensure the save directory exists
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+        print(f"Directory '{save_dir}' created.")
+
     # Save the fitted encoder and bins
-    encoder_path = os.path.join(save_dir, 'transaction_type_encoder.pkl')
-    bins_path = os.path.join(save_dir, 'amt_bins_info.pkl')
-    
     with open(encoder_path, 'wb') as f:
         pickle.dump(le, f)
-    
     with open(bins_path, 'wb') as f:
         pickle.dump((amt_bins, bin_labels), f)
-    
+
     print(f"Global label encoder saved to {encoder_path}")
     print(f"Amount bins info saved to {bins_path}")
     print(f"Total unique transaction types: {len(le.classes_)}")
-    
+
     return le, amt_bins, bin_labels
 
 
@@ -244,20 +275,48 @@ def load_fitted_encoder_and_bins(save_dir: str = '../data'):
     return label_encoder, amt_bins, bin_labels
 
 
+def create_folder(folder_path):
+    """
+    Creates a folder at the specified path if it doesn't already exist.
+
+    Args:
+        folder_path (str): The path of the folder to create.
+
+    Returns:
+        str: A message indicating whether the folder was created or already exists.
+    """
+    try:
+        # Check if the folder already exists
+        if not os.path.exists(folder_path):
+            # Create the folder
+            os.makedirs(folder_path)
+            return f"Folder created at: {folder_path}"
+        else:
+            return f"Folder already exists at: {folder_path}"
+    except Exception as e:
+        return f"An error occurred while creating the folder: {e}"
+    
 if __name__ == "__main__":
     # Save the raw files
-    save_raw_data(save_dir = "../data/01_raw")
+
+    RAW_FILE_PATH = "../data/01_raw"
+    PROCESSED_FILE_PATH = "../data/02_process"
+
+    create_folder(RAW_FILE_PATH)
+    create_folder(PROCESSED_FILE_PATH)
+
+    save_raw_data(save_dir = RAW_FILE_PATH)
 
     # Step 1: Fit global label encoder on combined dataset
     label_encoder, amt_bins, bin_labels = fit_global_label_encoder(
-        train_path='../data/01_raw/credit_card_transaction_train_raw.csv',
-        test_path='../data/01_raw/credit_card_transaction_test_raw.csv'
+        train_path=f'{RAW_FILE_PATH}/credit_card_transaction_train_raw.csv',
+        test_path=f'{RAW_FILE_PATH}/credit_card_transaction_test_raw.csv'
     )
 
     # Step 2: Process both datasets using the fitted encoder
     preprocess_and_save_data(
-        input_path='../data/01_raw/credit_card_transaction_train_raw.csv',
-        output_path='../data/02_process/credit_card_transaction_train_processed.csv',
+        input_path=f'{RAW_FILE_PATH}/credit_card_transaction_train_raw.csv',
+        output_path=f'{PROCESSED_FILE_PATH}/credit_card_transaction_train_processed.csv',
         label_encoder=label_encoder,
         amt_bins=amt_bins,
         bin_labels=bin_labels,
@@ -266,8 +325,8 @@ if __name__ == "__main__":
     )
     
     preprocess_and_save_data(
-        input_path='../data/01_raw/credit_card_transaction_test_raw.csv',
-        output_path='../data/02_process/credit_card_transaction_test_processed.csv',
+        input_path=f'{RAW_FILE_PATH}/credit_card_transaction_test_raw.csv',
+        output_path=f'{PROCESSED_FILE_PATH}/credit_card_transaction_test_processed.csv',
         label_encoder=label_encoder,
         amt_bins=amt_bins,
         bin_labels=bin_labels,

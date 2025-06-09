@@ -12,3 +12,9 @@ umap.json
 val.json
 .env
 clustering_results/
+preprocess
+pretrain_ckpt/
+test.py
+test.ipynb
+clustering_result_trans/
+clustering_results_item/

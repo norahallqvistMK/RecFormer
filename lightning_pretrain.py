@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from multiprocessing import Pool
 from pathlib import Path
 from tqdm import tqdm
+from multiprocessing import get_context
 import json
 import argparse
 import torch
@@ -43,9 +44,7 @@ parser.add_argument('--fix_word_embedding', action='store_true')
 
 
 
-# tokenizer_glb: RecformerTokenizer = None
 def _par_tokenize_doc(doc, tokenizer):
-    
     item_id, item_attr = doc
     # print(f'Tokenizing item {item_id} with attributes {item_attr}')
     input_ids, token_type_ids = tokenizer.encode_item(item_attr)
@@ -67,8 +66,7 @@ def main():
     tokenizer = RecformerTokenizer.from_pretrained(args.model_name_or_path, config)
 
     # global tokenizer_glb
-    tokenizer_glb = tokenizer
-    print(f'Using tokenizer tokenizer_glb: {tokenizer_glb}')
+    print(f'Using tokenizer tokenizer_glb: {tokenizer}')
 
     # preprocess corpus
     path_corpus = Path(args.item_attr_file)
@@ -84,9 +82,15 @@ def main():
         print(f'Loading attribute data {path_corpus}')
         item_attrs = json.load(open(path_corpus))
         pool = Pool(processes=args.preprocessing_num_workers)
+        # tokenize_func = partial(_par_tokenize_doc, model_name_or_path=args.model_name_or_path, config = config)
+        # pool_func = pool.imap(func=tokenize_func, iterable=item_attrs.items())
+        # doc_tuples = list(tqdm(pool_func, total=len(item_attrs), ncols=100, desc=f'[Tokenize] {path_corpus}'))
         tokenize_func = partial(_par_tokenize_doc, tokenizer=tokenizer)
-        pool_func = pool.imap(func=tokenize_func, iterable=item_attrs.items())
-        doc_tuples = list(tqdm(pool_func, total=len(item_attrs), ncols=100, desc=f'[Tokenize] {path_corpus}'))
+        doc_tuples = []
+        for doc in tqdm(item_attrs.items(), total=len(item_attrs), ncols=100, desc=f'[Tokenize] {path_corpus}'):
+            result = tokenize_func(doc)
+            doc_tuples.append(result)
+
         tokenized_items = {item_id: [input_ids, token_type_ids] for item_id, input_ids, token_type_ids in doc_tuples}
         pool.close()
         pool.join()
@@ -136,8 +140,6 @@ def main():
                      )
 
     trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=dev_loader, ckpt_path=args.ckpt)
-
-
 
 if __name__ == "__main__":
     main()

@@ -141,7 +141,7 @@ def analyze_clustering_results(clustering_results, output_dir=None):
     
     return optimal_k
 
-def visualize_clusters(embeddings, cluster_labels, k, method='tsne', output_dir=None):
+def visualize_clusters(embeddings, cluster_labels, k = None, method='tsne', output_dir=None):
     """Visualize clusters in 2D using t-SNE, PCA, or UMAP"""
     embeddings_2d = None
     
@@ -168,7 +168,8 @@ def visualize_clusters(embeddings, cluster_labels, k, method='tsne', output_dir=
     scatter = plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], 
                           c=cluster_labels, cmap='tab10', alpha=0.7)
     plt.colorbar(scatter, label='Cluster')
-    plt.title(f'K-means Clustering Visualization (k={k}) - {method.upper()}')
+    title = f"K-means Clustering Visualization (k={k})" if k else f"K-means Clustering Visualization with Fraud Labels"
+    plt.title(f'{title} - {method.upper()}')
     plt.xlabel(f'{method.upper()} Component 1')
     plt.ylabel(f'{method.upper()} Component 2')
     
@@ -226,12 +227,16 @@ def load_data(args):
     item2id = read_json(os.path.join(args.data_path, args.item2id_file))
     id2item = {v:k for k, v in item2id.items()}
 
+
+    user2seqid = read_json(os.path.join(args.data_path, args.user2id_file))
+    seqid2user = {v:k for k, v in user2seqid.items()}
+
     item_meta_dict_filted = dict()
     for k, v in item_meta_dict.items():
         if k in item2id:
             item_meta_dict_filted[k] = v
 
-    return train, val, test, item_meta_dict_filted, item2id, id2item
+    return train, val, test, item_meta_dict_filted, item2id, id2item, user2seqid, seqid2user
 
 
 def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
@@ -432,6 +437,18 @@ def get_predictions_per_cluster(clustering_results: Dict[int, Dict], prediction_
 
     return cluster_to_predictions
 
+def get_sequence_ids_per_cluster_label(clustering_results: Dict[int, Dict], sequence_ids: List[int], k: int) -> Dict[int, List[int]]:
+    if k not in clustering_results:
+        raise ValueError(f"K={k} not found in clustering results")
+
+    labels = clustering_results[k]['labels']
+    cluster_to_predictions = {}
+
+    for label in np.unique(labels):
+        cluster_to_predictions[label] = [seq_id for seq_id, lbl in zip(sequence_ids, labels) if lbl == label]
+
+    return cluster_to_predictions
+
 def extract_embeddings(model, dataloader, device, max_sequences=None, cache_dir='clustering_results'):
     """
     Extract sequence embeddings from the model using the dataloader.
@@ -524,6 +541,8 @@ def extract_embeddings(model, dataloader, device, max_sequences=None, cache_dir=
     print(f"Extracted and cached {embeddings.shape[0]} sequence embeddings of dimension {embeddings.shape[1]}")
     return embeddings, sequence_ids, predictions
 
+
+
 def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max=20, 
                                      output_dir='clustering_results', visualize=True):
     """
@@ -562,17 +581,17 @@ def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max
     # Analyze results
     optimal_k = analyze_clustering_results(clustering_results, output_dir=output_dir)
 
-    # Get sequence IDs and data points per cluster
-    predictions_per_cluster = get_predictions_per_cluster(clustering_results, predictions, optimal_k)
+    # # Get sequence IDs and data points per cluster
+    sequence_ids_per_cluster_label = get_sequence_ids_per_cluster_label(clustering_results, sequence_ids, optimal_k)
         
     # Save results
     save_clustering_results(clustering_results, sequence_ids, output_dir)
     print(f"Clustering results saved to {output_dir}")
 
     # Save data points
-    predictions_per_cluster = make_json_safe(predictions_per_cluster)
-    with open(os.path.join(output_dir, "item_pred_per_cluster_label.json"), 'w') as f:
-        json.dump(predictions_per_cluster, f, indent=2)
+    sequence_ids_per_cluster_label = make_json_safe(sequence_ids_per_cluster_label)
+    with open(os.path.join(output_dir, "sequence_ids_per_cluster_label.json"), 'w') as f:
+        json.dump(sequence_ids_per_cluster_label, f, indent=2)
     
     # Visualize clusters for optimal k
     if visualize:
@@ -585,8 +604,35 @@ def cluster_sequences_with_predictions(model, dataloader, device, k_min=2, k_max
     # Print detailed statistics for optimal k
     get_cluster_statistics(clustering_results, optimal_k)
     
-    return (clustering_results, embeddings, sequence_ids, predictions, predictions_per_cluster)
+    return (clustering_results, embeddings, sequence_ids, predictions, sequence_ids_per_cluster_label)
 
+def get_transaction_sequence_per_user(sequence_ids, dataloader, id2item, seqid2cc):
+    "Returns a dict with keys as the cc_num mapped to the set of transactions"
+    transactions_per_cc_number= {}
+    for seq_id in sequence_ids: 
+        items_seq_ids, item_label_ids = dataloader.__getitem__(int(seq_id))
+        transactions_per_cc_number[seqid2cc[seq_id]] = [id2item[i] for i in items_seq_ids]
+    return transactions_per_cc_number
+                
+def get_fraud_labels_by_cc(transactions_per_cc_number, df):
+    """
+    Given a mapping from cc_number to transaction IDs and a DataFrame with 
+    'cc_number', 'transaction_number', and 'is_fraud' columns, return a dict
+    mapping each cc_number to a list of is_fraud labels (0 or 1).
+    """
+    # Create a lookup dictionary for (cc_number, transaction_number) → is_fraud
+    df_lookup = df.set_index(['cc_num', 'transaction_type_id'])['is_fraud'].to_dict()
+    
+    fraud_labels_by_cc = {}
+
+    for cc_number, transaction_ids in transactions_per_cc_number.items():
+        labels = [
+            df_lookup[int(cc_number), txn_id]  # Default to 0 if not found
+            for txn_id in transaction_ids
+        ]
+        fraud_labels_by_cc[cc_number] = labels
+
+    return fraud_labels_by_cc
 
 # Modified main function
 def main():
@@ -602,6 +648,10 @@ def main():
     parser.add_argument('--test_file', type=str, default='test.json')
     parser.add_argument('--item2id_file', type=str, default='smap.json')
     parser.add_argument('--meta_file', type=str, default='meta_data.json')
+    parser.add_argument('--user2id_file', type=str, default='umap.json')
+    parser.add_argument('--test_df', type=str, default='data/02_process/credit_card_transaction_train_processed.csv')
+
+
 
     # data process
     parser.add_argument('--preprocessing_num_workers', type=int, default=8, help="The number of processes to use for the preprocessing.")
@@ -626,7 +676,7 @@ def main():
 
     print(args)
 
-    train, val, test, item_meta_dict, item2id, id2item = load_data(args)
+    train, val, test, item_meta_dict, item2id, id2item, user2seqid, seqid2user = load_data(args)
 
     config = RecformerConfig.from_pretrained(args.model_name_or_path)
     config.max_attr_num = 3  # max number of attributes for each item
@@ -700,7 +750,7 @@ def main():
     model.to(args.device) # send item embeddings to device
     
     # Replace the original clustering call with:
-    (clustering_results, embeddings, sequence_ids, predictions, predictions_per_cluster) = cluster_sequences_with_predictions(
+    (clustering_results, embeddings, sequence_ids, predictions, get_sequence_ids_per_cluster_label) = cluster_sequences_with_predictions(
         model=model,
         dataloader=test_loader,
         device=args.device, 
@@ -712,35 +762,56 @@ def main():
 
     print("Clustering results:", clustering_results)
 
-
-    # Get metadata for predicted items (new functionality)
-    prediction_metadata_per_cluster, prediction_item_names_per_cluster = get_prediction_metadata_per_cluster(
-        predictions_per_cluster,
-        item_meta_dict,
-        id2item
-    )
-
-    prediction_metadata_per_cluster = make_json_safe(prediction_metadata_per_cluster)
-    with open(os.path.join("clustering_results", "prediction_metadata_per_cluster.json"), 'w') as f:
-        json.dump(prediction_metadata_per_cluster, f, indent=2)
-
-    prediction_item_names_per_cluster = make_json_safe(prediction_item_names_per_cluster)
-    with open(os.path.join("clustering_results", "prediction_item_names_per_cluster.json"), 'w') as f:
-        json.dump(prediction_item_names_per_cluster, f, indent=2)
-
-    # Generate cluster descriptions for predictions
-    prediction_cluster_descriptions = {}
     
-    for k in prediction_metadata_per_cluster.keys():
-        # Description based on predicted items
-        predicted_sequences = prediction_metadata_per_cluster[k]
-        prediction_cluster_descriptions[k] = get_cluster_description(predicted_sequences)
-        print(f"Cluster {k} (predictions) description: {prediction_cluster_descriptions[k]}")
+    transactions_per_cc_number = get_transaction_sequence_per_user(sequence_ids,test_data, id2item, seqid2user)
+    
+    df_test = pd.read_csv(args.test_df)
+    fraud_labels_by_cc = get_fraud_labels_by_cc(transactions_per_cc_number, df_test)
+    fraud_labels = [1 if any(fraud) else 0 for fraud in fraud_labels_by_cc.values()]
+    
+    visualize_clusters(embeddings, fraud_labels, method='tsne', output_dir="clustering_result_trans")
+    visualize_clusters(embeddings, fraud_labels, method='pca', output_dir="clustering_result_trans")
+    visualize_clusters(embeddings, fraud_labels, method='umap', output_dir="clustering_result_trans")
 
-    # Save descriptions        
-    prediction_cluster_descriptions = {int(k): list(v) for k, v in prediction_cluster_descriptions.items()}
-    with open(os.path.join("clustering_results", "prediction_cluster_descriptions.json"), 'w') as f:
-        json.dump(prediction_cluster_descriptions, f, indent=2)
+
+
+
+
+
+
+    
+
+    # get_sequence_ids_per_cluster_label = get_
+
+
+    # # Get metadata for predicted items (new functionality)
+    # prediction_metadata_per_cluster, prediction_item_names_per_cluster = get_prediction_metadata_per_cluster(
+    #     predictions_per_cluster,
+    #     item_meta_dict,
+    #     id2item
+    # )
+
+    # prediction_metadata_per_cluster = make_json_safe(prediction_metadata_per_cluster)
+    # with open(os.path.join("clustering_results", "prediction_metadata_per_cluster.json"), 'w') as f:
+    #     json.dump(prediction_metadata_per_cluster, f, indent=2)
+
+    # prediction_item_names_per_cluster = make_json_safe(prediction_item_names_per_cluster)
+    # with open(os.path.join("clustering_results", "prediction_item_names_per_cluster.json"), 'w') as f:
+    #     json.dump(prediction_item_names_per_cluster, f, indent=2)
+
+    # # Generate cluster descriptions for predictions
+    # prediction_cluster_descriptions = {}
+    
+    # for k in prediction_metadata_per_cluster.keys():
+    #     # Description based on predicted items
+    #     predicted_sequences = prediction_metadata_per_cluster[k]
+    #     prediction_cluster_descriptions[k] = get_cluster_description(predicted_sequences)
+    #     print(f"Cluster {k} (predictions) description: {prediction_cluster_descriptions[k]}")
+
+    # # Save descriptions        
+    # prediction_cluster_descriptions = {int(k): list(v) for k, v in prediction_cluster_descriptions.items()}
+    # with open(os.path.join("clustering_results", "prediction_cluster_descriptions.json"), 'w') as f:
+    #     json.dump(prediction_cluster_descriptions, f, indent=2)
 
 if __name__ == "__main__":
     main()

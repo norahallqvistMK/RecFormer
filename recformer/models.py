@@ -595,8 +595,74 @@ class RecformerForSeqRec(LongformerPreTrainedModel):
             target = torch.zeros_like(labels, device=labels.device)
             loss = loss_fct(logits, target)
 
-            # if we wanted to return the predicted labeles
-            # predicted_indices = torch.argmax(logits, dim=-1)  # Shape: [batch_size]
-            # predicted_labels = candidates[torch.arange(batch_size), predicted_indices]  # Shape: [batch_size]
-
         return loss
+
+
+class RecformerForFraudDetection(LongformerPreTrainedModel):
+    def __init__(self, config: RecformerConfig):
+        super().__init__(config)
+
+        self.longformer = RecformerModel(config)
+        
+        # Binary for predicting fraud
+        self.dropout = nn.Dropout(config.hidden_dropout_prob if hasattr(config, 'hidden_dropout_prob') else 0.1)
+        self.classifier = nn.Linear(config.hidden_size, 1)  # 2 classes: fraud (1) and not fraud (0)
+        
+        # BCEWithLogitsLoss will use pos_weight from config (a single float tensor)
+        self.pos_weight = torch.tensor(config.pos_weight) if hasattr(config, "pos_weight") else torch.tensor(1.0)
+        
+        # Initialize weights and apply final processing
+        self.post_init()
+
+    def forward(self,
+                input_ids: Optional[torch.Tensor] = None,
+                attention_mask: Optional[torch.Tensor] = None,
+                global_attention_mask: Optional[torch.Tensor] = None,
+                head_mask: Optional[torch.Tensor] = None,
+                token_type_ids: Optional[torch.Tensor] = None,
+                position_ids: Optional[torch.Tensor] = None,
+                item_position_ids: Optional[torch.Tensor] = None,
+                inputs_embeds: Optional[torch.Tensor] = None,
+                output_attentions: Optional[bool] = None,
+                output_hidden_states: Optional[bool] = None,
+                return_dict: Optional[bool] = None,
+                labels: Optional[torch.Tensor] = None,  # fraud labels (0 or 1)
+                ):
+
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        outputs = self.longformer(
+            input_ids,
+            attention_mask=attention_mask,
+            global_attention_mask=global_attention_mask,
+            head_mask=head_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            item_position_ids=item_position_ids,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=True,
+        )
+
+        pooler_output = outputs.pooler_output  # (batch_size, hidden_size)
+        
+        # Apply dropout and classification head
+        pooler_output = self.dropout(pooler_output)
+        logits = self.classifier(pooler_output).squeeze(-1)  # (batch_size,)  # (batch_size, 2)
+
+        loss = None
+        if labels is not None:
+            labels = labels.float() # BCEWithLogitsLoss expects float labels
+            pos_weight = self.pos_weight.to(logits.device)
+            loss_fct = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            loss = loss_fct(logits, labels) 
+
+        # if not return_dict:
+        #     output = (logits,) + outputs[2:]
+        #     return ((loss,) + output) if loss is not None else output
+
+        if not return_dict:
+            return (loss, logits) if loss is not None else logits
+
+        return {"loss": loss, "logits": logits}

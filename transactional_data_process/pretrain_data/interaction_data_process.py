@@ -5,7 +5,7 @@ from helper import save_metadata_to_json
 import json
 
 def extract_interaction_from_file(
-    file_path: str, 
+    df: pd.DataFrame, 
     json_meta_path: str,
     group_col: str = "cc_num"
 ) -> List[List[int]]:
@@ -15,8 +15,7 @@ def extract_interaction_from_file(
 
     Parameters:
     -----------
-    file_path : str
-        Path to the CSV or Parquet file containing the transaction data.
+    df : dataframe 
     json_meta_path : str
         Path to a JSON file containing a dictionary where keys are valid transaction_type_ids.
     group_col : str
@@ -38,19 +37,6 @@ def extract_interaction_from_file(
         print(f"Error reading metadata file {json_meta_path}: {e}")
         sys.exit(1)
 
-    # Load transaction data
-    try:
-        if file_path.endswith(".csv"):
-            df = pd.read_csv(file_path)
-        elif file_path.endswith(".parquet"):
-            df = pd.read_parquet(file_path)
-        else:
-            print(f"Unsupported file format for {file_path}. Please use CSV or Parquet.")
-            sys.exit(1)
-        print(f"Loaded data from {file_path}. Shape: {df.shape}")
-    except Exception as e:
-        print(f"Error reading file {file_path}: {e}")
-        sys.exit(1)
     
     required_cols = {group_col, 'transaction_type_id', 'trans_date_trans_time'}
     if not required_cols.issubset(df.columns):
@@ -62,17 +48,32 @@ def extract_interaction_from_file(
     for _, group in df.groupby(group_col):
         sorted_group = group.sort_values(by='trans_date_trans_time')
         sequence = sorted_group['transaction_type_id'].tolist()
-        if any(tid in valid_type_ids for tid in sequence):
-            sorted_sequences.append(sequence)
+        valid_sequence_ids = [s for s in sequence if s in valid_type_ids]
+        sorted_sequences.append(valid_sequence_ids)
 
     print(f"Extracted {len(sorted_sequences)} filtered sequences based on '{group_col}'.")
     return sorted_sequences
 
+
+def get_dataframe(train_path:str ,test_path:str = None):
+    # Read both datasets
+    df = pd.read_csv(train_path)
+    if test_path:
+        df_test = pd.read_csv(test_path)
+        # Combine datasets for fitting
+        df = pd.concat([df, df_test], ignore_index=True)
+
+    return df
+
+
 def main():
-    input_file_path = '../data/02_process/credit_card_transaction_train_processed.csv'
+    input_file_path_train = '../../data/02_process/credit_card_transaction_train_processed.csv'
+    # input_file_path_test = '../../data/02_process/credit_card_transaction_test_processed.csv'
+
+    df = get_dataframe(train_path=input_file_path_train)
     meta_data_path = "meta_data.json"
 
-    all_sequences = extract_interaction_from_file(input_file_path, meta_data_path)
+    all_sequences = extract_interaction_from_file(df, meta_data_path)
     train_idx = int(len(all_sequences) * 0.85)
     train_sequences = all_sequences[:train_idx]
     val_sequences = all_sequences[train_idx:]
@@ -83,9 +84,6 @@ def main():
     # Save the sequences to files
     save_metadata_to_json(train_sequences, 'train.json')
     save_metadata_to_json(val_sequences, 'dev.json')
-
-    # input_file_path_test = '../data/credit_card_transaction_train_processed.csv'
-
 
 if __name__ == "__main__":
     main()

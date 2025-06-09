@@ -1,0 +1,178 @@
+import json
+import os
+import random
+import argparse
+from collections import defaultdict
+import pandas as pd
+from tqdm import tqdm
+
+
+class LabelField:
+    def __init__(self):
+        self.label2id = dict()
+        self.label_num = 0
+
+    def get_id(self, label):
+        
+        if label in self.label2id:
+            return self.label2id[label]
+        
+        self.label2id[label] = self.label_num
+        self.label_num += 1
+
+        return self.label2id[label]
+
+def extract_metadata(file_path):
+    """Extract metadata for each transaction type from CSV file."""
+    df = pd.read_csv(file_path, nrows=100000)
+    print(f"Loaded metadata from {file_path}, shape: {df.shape}")
+    
+    # Define metadata columns to extract
+    meta_columns = {
+        "amount": "amt_bin",
+        "merchant": "merchant", 
+        "year": "year",
+        "month": "month",
+        "day": "day",
+        "weekday": "day_of_week"
+    }
+    
+    # Get available columns
+    available_cols = {k: v for k, v in meta_columns.items() if v in df.columns}
+    missing_cols = [v for v in meta_columns.values() if v not in df.columns]
+    
+    if missing_cols:
+        print(f"Warning: Missing columns: {missing_cols}")
+    
+    # Extract metadata per transaction type
+    metadata = {}
+    for trans_id, group in df.groupby("transaction_type_id"):
+        first_row = group.iloc[0]
+        metadata[trans_id] = {
+            key: str(first_row[col]) for key, col in available_cols.items()
+        }
+    
+    print(f"Extracted metadata for {len(metadata)} transaction types")
+    return metadata
+
+
+def extract_sequences(df, meta_dict=None, group_col="cc_num"):
+    """Extract transaction sequences per group from CSV file."""
+    
+    sequences = {}
+    valid_transactions = list(meta_dict.keys()) if meta_dict else []
+    if not valid_transactions:
+        print("No valid transactions found. The sequences dictionary will be empty.")
+
+    for group_id, group in df.groupby(group_col):
+        # Sort by timestamp
+        sorted_group = group.sort_values('trans_date_trans_time')
+        trans_ids = sorted_group['transaction_type_id'].tolist()
+            
+        filtered_trans = [t for t in trans_ids if t in valid_transactions]
+        
+        if filtered_trans:
+            sequences[group_id] = filtered_trans
+    
+    print(f"Extracted {len(sequences)} sequences")
+    return sequences
+
+
+def split_test_data(test_sequences, dev_ratio=0.5, seed=42):
+    """Split test data into dev and test sets."""
+    keys = list(test_sequences.keys())
+    random.seed(seed)
+    random.shuffle(keys)
+    
+    split_point = int(len(keys) * dev_ratio)
+    dev_keys = keys[:split_point]
+    test_keys = keys[split_point:]
+    
+    dev_dict = {k: test_sequences[k] for k in dev_keys}
+    test_dict = {k: test_sequences[k] for k in test_keys}
+    
+    return dev_dict, test_dict
+
+
+def save_json(data, filepath):
+    """Save data to JSON file."""
+    with open(filepath, 'w', encoding='utf8') as f:
+        json.dump(data, f)
+
+def get_dataframe(train_path:str ,test_path:str = None):
+    # Read both datasets
+    df = pd.read_csv(train_path)
+    if test_path:
+        df_test = pd.read_csv(test_path)
+        # Combine datasets for fitting
+        df = pd.concat([df, df_test], ignore_index=True)
+
+    return df
+
+
+
+def main():
+    # Parse arguments
+    file_path_train = "../../data/02_process/credit_card_transaction_train_processed.csv"
+    # file_path_test = "../../data/02_process/credit_card_transaction_test_processed.csv"
+    output_path = "."
+    meta_data_path = "meta_data.json"
+
+    df = get_dataframe(file_path_train)
+    
+    # Create output directory
+    os.makedirs(output_path, exist_ok=True)
+    
+    # Extract data meta data
+    print("Getting metadata...")
+    with open(meta_data_path, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+    
+    print("Extracting sequences...")
+    raw_sequences = extract_sequences(df, metadata)
+
+    # Encode labels
+    cc_encoder = LabelField()
+    transaction_encoder = LabelField()
+    sequences = defaultdict(list)
+
+    for k, v in raw_sequences.items():
+        sequences[cc_encoder.get_id(k)] = [transaction_encoder.get_id(ele) for ele in v]
+
+    train_dict = dict()
+    dev_dict = dict()
+    test_dict = dict()
+
+    intersections = 0
+
+    for k, v in tqdm(sequences.items()):
+        length = len(sequences[k])
+        intersections += length
+        if length<3:
+            train_dict[k] = sequences[k]
+        else:
+            train_dict[k] = sequences[k][:length-2]
+            dev_dict[k] = [sequences[k][length-2]]
+            test_dict[k] = [sequences[k][length-1]]
+    
+    print(f'Users: {len(cc_encoder.label2id)}, '
+          f'Transactions: {len(transaction_encoder.label2id)}, '
+          f'Train: {len(train_dict)}, '
+          f'Dev: {len(dev_dict)}, '
+          f'Test: {len(test_dict)}')
+    
+    # Save all files
+    output_files = {
+        'train.json': train_dict,
+        'val.json': dev_dict,
+        'test.json': test_dict,
+        'umap.json': cc_encoder.label2id,
+        'smap.json': transaction_encoder.label2id}
+    
+    for filename, data in output_files.items():
+        filepath = os.path.join(output_path, filename)
+        save_json(data, filepath)
+        print(f"Saved {filename}")
+
+if __name__ == "__main__":
+    main()
