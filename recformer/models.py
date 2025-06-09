@@ -169,7 +169,6 @@ class RecformerPooler(nn.Module):
         return output
         
 
-
 class RecformerModel(LongformerPreTrainedModel):
     def __init__(self, config: RecformerConfig):
         super().__init__(config)

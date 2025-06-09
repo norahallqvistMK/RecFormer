@@ -57,22 +57,29 @@ def extract_metadata(file_path):
 
 
 def extract_sequences(df, meta_dict=None, group_col="cc_num"):
-    """Extract transaction sequences per group from CSV file."""
+    """Extract transaction sequences per group from CSV file - optimized version."""
     
+    if meta_dict is None:
+        valid_transactions = set()
+    else:
+        valid_transactions = set(meta_dict.keys())
+    
+    # Pre-filter the dataframe if metadata is provided
+    if valid_transactions:
+        df_filtered = df[df['transaction_type_id'].isin(valid_transactions)]
+    else:
+        df_filtered = df
+    
+    # Sort once for the entire dataframe
+    df_sorted = df_filtered.sort_values(['cc_num', 'trans_date_trans_time'])
+    
+    # Group and process using vectorized operations
     sequences = {}
-    valid_transactions = list(meta_dict.keys()) if meta_dict else []
-    if not valid_transactions:
-        print("No valid transactions found. The sequences dictionary will be empty.")
-
-    for group_id, group in df.groupby(group_col):
-        # Sort by timestamp
-        sorted_group = group.sort_values('trans_date_trans_time')
-        trans_ids = sorted_group['transaction_type_id'].tolist()
-            
-        filtered_trans = [t for t in trans_ids if t in valid_transactions]
-        
-        if filtered_trans:
-            sequences[group_id] = filtered_trans
+    
+    for group_id, group in df_sorted.groupby(group_col):
+        trans_ids = group['transaction_type_id'].tolist()
+        if trans_ids:
+            sequences[group_id] = trans_ids
     
     print(f"Extracted {len(sequences)} sequences")
     return sequences

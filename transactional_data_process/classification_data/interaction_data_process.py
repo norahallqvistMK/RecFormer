@@ -57,30 +57,33 @@ def extract_metadata(file_path):
 
 
 def extract_sequences(df, meta_dict=None, group_col="cc_num"):
-    """Extract transaction sequences per group from CSV file."""
+    """Extract transaction sequences per group from CSV file - optimized version."""
     
+    if meta_dict is None:
+        valid_transactions = set()
+    else:
+        valid_transactions = set(meta_dict.keys())
+    
+    # Pre-filter the dataframe if metadata is provided
+    if valid_transactions:
+        df_filtered = df[df['transaction_type_id'].isin(valid_transactions)]
+    else:
+        df_filtered = df
+    
+    # Sort once for the entire dataframe
+    df_sorted = df_filtered.sort_values(['cc_num', 'trans_date_trans_time'])
+    
+    # Group and process using vectorized operations
     sequences = {}
-    valid_transactions = list(meta_dict.keys())
-
-    for group_id, group in df.groupby(group_col):
-        # Sort by timestamp
-        sorted_group = group.sort_values('trans_date_trans_time')
-        trans_ids = sorted_group['transaction_type_id'].tolist()
-        fraud_flags = sorted_group['is_fraud'].tolist()
-        
-        # Filter by metadata if provided
     
-        filtered_trans = []
-        filtered_fraud = []
-        for trans_id, fraud in zip(trans_ids, fraud_flags):
-            if trans_id in valid_transactions:
-                filtered_trans.append(trans_id)
-                filtered_fraud.append(fraud)
+    for group_id, group in df_sorted.groupby(group_col):
+        trans_ids = group['transaction_type_id'].tolist()
+        fraud_flags = group['is_fraud'].tolist()
         
-        if filtered_trans and filtered_fraud:
-            # Create sequence with fraud label
-            has_fraud = 1 if any(filtered_fraud) else 0
-            sequences[group_id] = [filtered_trans, [has_fraud]]
+        if trans_ids and fraud_flags:
+            # Use any() for faster fraud detection
+            has_fraud = 1 if any(fraud_flags) else 0
+            sequences[group_id] = [trans_ids, [has_fraud]]
     
     print(f"Extracted {len(sequences)} sequences")
     return sequences
@@ -120,7 +123,6 @@ def split_data(sequences, train_ratio=0.8, val_ratio=0.1, test_ratio=0.1, seed=4
     test_dict = {k: sequences[k] for k in test_keys}
     
     return train_dict, val_dict, test_dict
-
 
 def save_json(data, filepath):
     """Save data to JSON file."""

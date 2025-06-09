@@ -6,7 +6,7 @@ python load_data.py
 
 # Step 2: Define output directories and parameters
 OUTPUT_DIRS=("pretrain_data" "classification_data" "finetune_data")
-NUMBER_ITEMS=20000
+NUMBER_ITEMS=50000
 
 # Step 3: Run metadata extraction for each output directory
 for OUTPUT_DIR in "${OUTPUT_DIRS[@]}"; do

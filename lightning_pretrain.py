@@ -42,8 +42,6 @@ parser.add_argument('--ckpt', type=str, default=None)
 parser.add_argument('--longformer_ckpt', type=str, default='longformer_ckpt/longformer-base-4096.bin')
 parser.add_argument('--fix_word_embedding', action='store_true')
 
-
-
 def _par_tokenize_doc(doc, tokenizer):
     item_id, item_attr = doc
     # print(f'Tokenizing item {item_id} with attributes {item_attr}')
@@ -100,6 +98,8 @@ def main():
     tokenized_items = json.load(open(path_tokenized_items))#dir_preprocess / f'attr_small.json'))#
     print(f'Successfully load {len(tokenized_items)} tokenized items.')
 
+    tokenized_items = {str(k): v for k, v in tokenized_items.items()}
+
     data_collator = PretrainDataCollatorWithPadding(tokenizer, tokenized_items, mlm_probability=args.mlm_probability)
     train_data = ClickDataset(json.load(open(args.train_file)), data_collator)
     dev_data = ClickDataset(json.load(open(args.dev_file)), data_collator)
@@ -127,10 +127,10 @@ def main():
     checkpoint_callback = ModelCheckpoint(save_top_k=5, monitor="accuracy", mode="max", filename="{epoch}-{accuracy:.4f}")
     
     trainer = Trainer(accelerator="gpu",
-                     max_epochs=args.num_train_epochs,
+                      max_epochs=args.num_train_epochs,
                      devices=args.device,
                      accumulate_grad_batches=args.gradient_accumulation_steps,
-                     val_check_interval=args.valid_step,
+                    #  val_check_interval=args.valid_step,
                      default_root_dir=args.output_dir,
                      gradient_clip_val=1.0,
                      log_every_n_steps=args.log_step,
