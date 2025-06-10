@@ -16,42 +16,48 @@ def save_metadata_to_json(metadata, output_path):
         json.dump(metadata, f, indent=4)
     print(f"Metadata saved to {output_path}")
 
-def get_amt_bins(df: pd.DataFrame, number_bins: int = 1000, min_amt: int = 0, max_amt: int = 30000):
+def get_amt_bins(df: pd.DataFrame, number_bins: int = 100, min_amt: int = 0, max_amt: int = 30000):
     """
-    Create a mapping of amount bins to token IDs.
+    Create a mapping of amount bins to token IDs that matches the tokenizer intervals.
     
     Parameters:
     - df: DataFrame containing the 'amt' column.
-    - number_bins: Number of bins to create for the amount.
-    - min_amt: Minimum amount for binning.
-    - max_amt: Maximum amount for binning.
+    - number_bins: Number of bins to create for the amount (default: 100).
+    - min_amt: Minimum amount for binning (default: 0).
+    - max_amt: Maximum amount for binning (default: 30000).
     
     Returns:
-    - A dictionary mapping amount bins to token IDs.
+    - amount_bins: Array of bin edges
+    - bin_labels: List of bin labels matching tokenizer format
     """
     if 'amt' not in df.columns:
         raise ValueError("DataFrame must contain an 'amt' column.")
 
-    # Create unique, rounded integer bin edges
-    amount_bins = np.linspace(min_amt, max_amt, number_bins + 1)
-    amount_bins = np.unique(np.round(amount_bins).astype(int))
+    # Calculate interval size to match tokenizer
+    interval_size = (max_amt - min_amt) // number_bins  # 30000 / 100 = 300
+    
+    # Create bin edges with fixed intervals
+    amount_bins = []
+    for i in range(number_bins + 1):
+        amount_bins.append(min_amt + i * interval_size)
+    
+    # Add infinity for the final open-ended bin
+    amount_bins.append(np.inf)
+    amount_bins = np.array(amount_bins)
 
-    # Append infinity to create a final open-ended bin
-    if amount_bins[-1] < np.inf:
-        amount_bins = np.append(amount_bins, np.inf)
-
-    # Generate bin labels (skip the first edge)
+    # Generate bin labels to match tokenizer format
     bin_labels = []
-    for i in range(1, len(amount_bins)):
-        left = amount_bins[i - 1]
-        right = amount_bins[i]
-        if np.isinf(right):
-            #[] is needed to indicate it is a special token later in the tokeniser
-            label = f"[AMOUNT_{left}-PLUS]"
-        else:
-            label = f"[AMOUNT_{left}-{right}]"
+    for i in range(number_bins):
+        left = amount_bins[i]
+        right = amount_bins[i + 1]
+        # Format: [AMOUNT_start_end] to match tokenizer
+        label = f"[AMOUNT_{left}_{right}]"
         bin_labels.append(label)
+    
+    # Add the final 30000-Plus bin to match tokenizer
+    bin_labels.append("[AMOUNT_30000_PLUS]")
 
+    # Create token dictionary
     token_dict = {label: f"{idx}" for idx, label in enumerate(bin_labels)}
     save_metadata_to_json(token_dict, 'data/amt_bins.json')
     

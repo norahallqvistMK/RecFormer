@@ -114,8 +114,10 @@ def main():
                             collate_fn=dev_data.collate_fn,
                             num_workers=args.dataloader_num_workers)
     
+    
     pytorch_model = RecformerForPretraining(config)
     pytorch_model.load_state_dict(torch.load(args.longformer_ckpt))
+
 
     if args.fix_word_embedding:
         print('Fix word embeddings.')
@@ -130,6 +132,8 @@ def main():
         mode="max",          # "min" because lower loss is better
         filename="{epoch}-{accuracy:.4f}"
     )     
+    for batch in train_loader:
+        print(batch)
     
     trainer = Trainer(accelerator="gpu",
                       max_epochs=args.num_train_epochs,

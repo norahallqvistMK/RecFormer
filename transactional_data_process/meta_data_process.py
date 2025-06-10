@@ -4,13 +4,25 @@ import os
 from itertools import islice
 import argparse
 
+def convert_to_serializable(value):
+    """Convert pandas/numpy types to JSON-serializable Python types"""
+    if pd.isna(value):
+        return None
+    elif pd.api.types.is_integer_dtype(type(value)):
+        return int(value)
+    elif pd.api.types.is_float_dtype(type(value)):
+        return float(value)
+    elif pd.api.types.is_bool_dtype(type(value)):
+        return bool(value)
+    else:
+        return str(value)
 
 def extract_metadata(df):
     """Extract metadata for each transaction type from CSV file."""
     
     # Define metadata columns to extract
     meta_columns = {
-        "amount": "amt_bin",
+        "amount": "amt",
         "merchant": "merchant", 
         "month": "month",
         "day": "day",
@@ -29,7 +41,7 @@ def extract_metadata(df):
     for trans_id, group in df.groupby("transaction_type_id"):
         first_row = group.iloc[0]
         metadata[trans_id] = {
-            key: int(first_row[col]) if pd.api.types.is_numeric_dtype(type(first_row[col])) else str(first_row[col])
+            key: convert_to_serializable(first_row[col])
             for key, col in available_cols.items()
         }
     
@@ -66,7 +78,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Extract metadata from transaction datasets and save as JSON.")
     parser.add_argument("--train_path", type=str, default=TRAIN_PATH, help="Path to the training dataset CSV file.")
     parser.add_argument("--test_path", type=str, default=None, help="Path to the test dataset CSV file (optional).")
-    parser.add_argument("--number_items", type=int, default=20000, help="Number of items to include in the metadata (optional).")
+    parser.add_argument("--number_items", type=int, default=50000, help="Number of items to include in the metadata (optional).")
     parser.add_argument("--output_dir", type=str, default="", help="Directory to save the output JSON file (optional).")
 
     # Parse the arguments

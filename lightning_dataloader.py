@@ -18,5 +18,8 @@ class ClickDataset(Dataset):
         return self.dataset[index]
 
     def collate_fn(self, data):
-
+        print(data)
         return self.collator([{'items': line} for line in data])
+    
+
+

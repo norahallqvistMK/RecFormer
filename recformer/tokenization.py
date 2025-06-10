@@ -1,6 +1,10 @@
 import torch
 from transformers import LongformerTokenizer
 
+AMOUNT_INTERVAL_SIZE = 300
+NUM_AMOUNT_BINS = 100
+MAX_AMOUNT = 30000
+
 class RecformerTokenizer(LongformerTokenizer):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, config=None):
@@ -9,6 +13,16 @@ class RecformerTokenizer(LongformerTokenizer):
 
         # Add custom tokens for financial transactions
         custom_tokens = []
+
+        #Month Tokens
+        amount = []
+        for i in range(NUM_AMOUNT_BINS):
+            start = i * AMOUNT_INTERVAL_SIZE
+            end = (i + 1) * AMOUNT_INTERVAL_SIZE
+            amount.append(f'[AMOUNT_{start}_{end}]')
+        # Add the final 30000-Plus token
+        amount.append(f'[AMOUNT_{MAX_AMOUNT}_PLUS]')
+        custom_tokens.extend(amount)
     
         #Month Tokens
         months = [f'[MONTH_{i}]' for i in range(1, 13)]
@@ -55,7 +69,17 @@ class RecformerTokenizer(LongformerTokenizer):
     def item_tokenize(self, text):
         return self.convert_tokens_to_ids(self.tokenize(text))
     
-
+    def get_amount_token(self, amount):
+        """Convert amount to appropriate token"""
+        if amount >= MAX_AMOUNT:
+            return f'[AMOUNT_{MAX_AMOUNT}_PlUS]'
+        else:
+            # Find the appropriate interval
+            interval_index = min(int(amount // AMOUNT_INTERVAL_SIZE), NUM_AMOUNT_BINS - 1)  # Ensure we don't exceed 99
+            start = interval_index * AMOUNT_INTERVAL_SIZE
+            end = (interval_index + 1) * AMOUNT_INTERVAL_SIZE
+            return f'[AMOUNT_{start}_{end}]'
+    
     def get_month_token(self, month):
         """Convert month (1-12) to token"""
         return f'[MONTH_{month}]'
@@ -75,7 +99,7 @@ class RecformerTokenizer(LongformerTokenizer):
             return self.convert_tokens_to_ids([text])
         else:
             # Regular text tokenization
-            return self.convert_tokens_to_ids(self.tokenize(str(text)))
+            return self.convert_tokens_to_ids(self.tokenize(text))
         
 
     def encode_item(self, transaction):
@@ -93,14 +117,14 @@ class RecformerTokenizer(LongformerTokenizer):
         """
         input_ids = []
         token_type_ids = []
-        transaction = dict(list(transaction.items())[:self.config.max_attr_num])
-        
+
         # Process each attribute with special handling
         processed_attrs = []
 
         if 'amount' in transaction:
             # Description uses regular tokenization
-            processed_attrs.append(('amount', transaction["amount"]))
+            amount_token = self.get_amount_token(transaction["amount"])
+            processed_attrs.append(('amount', amount_token))
 
         if 'month' in transaction:
             month_token = self.get_month_token(transaction["month"])
@@ -288,37 +312,37 @@ if __name__ == "__main__":
     # inputs = tokenizer(items1)
     # print(inputs)
     # print(tokenizer.convert_ids_to_tokens(inputs['input_ids']))
-
+    import json 
     from models import RecformerConfig
     
     config = RecformerConfig.from_pretrained("allenai/longformer-base-4096")
     tokenizer = RecformerTokenizer.from_pretrained("allenai/longformer-base-4096", config=config)
 
-    # with open('/Users/Nora_Hallqvist/Code/RecFormer/transactional_data_process/pretrain_data/meta_data.json', 'r') as f:
-    #     data = json.load(f)
+    with open('/Users/Nora_Hallqvist/Code/RecFormer/transactional_data_process/pretrain_data/meta_data.json', 'r') as f:
+        data = json.load(f)
 
-    # first_key = next(iter(data))
-    # transactions = [data[first_key]]
-    # print(transactions)
+    first_key = next(iter(data))
+    transactions = [data[first_key]]
+    print(transactions)
 
     
 
-    transactions = [
-        {
-            'amount': '[AMOUTN_10_20]',
-            'month': 3,
-            'day': 15,
-            'weekday': 2,
-            'merchant': 'Coffee shop purchase'
-        },
-        {
-            'amount': '[AMOUTN_20_30]',
-            'month': 3,
-            'day': 14,
-            'weekday': 1,
-            'merchant': 'ATM withdrawal'
-        }
-    ]
+    # transactions = [
+    #     {
+    #         'amount': 1,
+    #         'month': 3,
+    #         'day': 15,
+    #         'weekday': 2,
+    #         'merchant': 'Coffee shop purchase'
+    #     },
+    #     {
+    #         'amount': 4000,
+    #         'month': 3,
+    #         'day': 14,
+    #         'weekday': 1,
+    #         'merchant': 'ATM withdrawal'
+    #     }
+    # ]
     
     # Encode the transactions
     encoded = tokenizer(transactions)
@@ -330,3 +354,15 @@ if __name__ == "__main__":
     # Test individual token conversion
     print("Month token:", tokenizer.get_month_token(3))
     print("Month token:", tokenizer.get_day_token(3))
+
+
+    input_ids = encoded["input_ids"]
+    # id = tokenizer.item_tokenize('[AMOUNT_0_300]')
+    # print("Amount token:", tokenizer.convert_ids_to_tokens(id))
+    for i in input_ids:
+        t = tokenizer.convert_ids_to_tokens(i)
+        print(t)
+
+
+
+
