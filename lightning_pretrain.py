@@ -126,9 +126,9 @@ def main():
 
     checkpoint_callback = ModelCheckpoint(
         save_top_k=5, 
-        monitor="val_loss",  # or just "loss" depending on your logging
-        mode="min",          # "min" because lower loss is better
-        filename="{epoch}-{val_loss:.4f}"
+        monitor="accuracy",  # or just "loss" depending on your logging
+        mode="max",          # "min" because lower loss is better
+        filename="{epoch}-{accuracy:.4f}"
     )     
     
     trainer = Trainer(accelerator="gpu",
