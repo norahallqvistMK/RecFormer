@@ -93,8 +93,8 @@ def _par_tokenize_doc(doc):
 
 def main():
     parser = ArgumentParser()
-    parser.add_argument('--pretrain_ckpt', type=str, default='longformer_ckpt/recformer_seqrec_ckpt.bin')
-    parser.add_argument('--data_path', type=str, default="finetune_data")
+    parser.add_argument('--pretrain_ckpt', type=str, default='pretrain_ckpt/seqrec_pretrain_trans_ckpt.bin')
+    parser.add_argument('--data_path', type=str, default="transactional_data_process/finetune_data")
     parser.add_argument('--output_dir', type=str, default='checkpoints')
     parser.add_argument('--model_name_or_path', type=str, default='allenai/longformer-base-4096')
     parser.add_argument('--train_file', type=str, default='train.json')

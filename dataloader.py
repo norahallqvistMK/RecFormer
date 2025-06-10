@@ -73,7 +73,7 @@ class RecformerFraudDataset(Dataset):
 
         user = self.users[index]
         seq = self.user_sequences[user][0] #
-        label = self.user_sequences[user][1][0] # [label] 
+        label = self.user_sequences[user][1] # [label] 
 
         return seq, label
 

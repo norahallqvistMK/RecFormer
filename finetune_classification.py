@@ -277,6 +277,20 @@ def _par_tokenize_doc(doc):
     return item_id, input_ids, token_type_ids
 
 
+def make_json_serializable(obj):
+    """Convert numpy arrays to lists for JSON serialization"""
+    if isinstance(obj, dict):
+        return {key: make_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    else:
+        return obj
 def calculate_pos_weight_from_dataset(dataset: DataLoader, label_key:str="labels", factor: int = 0.2):
     """
     Calculates fraud ratio, non-fraud ratio, and pos_weight for binary classification.
@@ -488,10 +502,6 @@ def main():
                     print(f'Early stopping after {patience} epochs without improvement')
                     break
     
-    metrics_path = path_output / "epoch_metrics.json"
-    with open(metrics_path, 'w') as f:
-        json.dump(epoch_metrics_log, f, indent=4)
-    print(f"Saved epoch metrics to {metrics_path}")
 
     print('Test with the best checkpoint.')  
     checkpoint = torch.load(path_ckpt)
@@ -504,6 +514,11 @@ def main():
         json.dump(test_metrics, f, indent=4)
     print(f"Saved test metrics to {test_path}")
 
+    metrics_path = path_output / "epoch_metrics.json"
+    epoch_metrics_log = make_json_serializable(epoch_metrics_log)
+    with open(metrics_path, 'w') as f:
+        json.dump(epoch_metrics_log, f, indent=4)
+    print(f"Saved epoch metrics to {metrics_path}")
                
 if __name__ == "__main__":
     main()

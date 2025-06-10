@@ -5,8 +5,8 @@ echo "Downloading and processing the data..."
 python load_data.py
 
 # Step 2: Define output directories and parameters
-OUTPUT_DIRS=("pretrain_data" "classification_data" "finetune_data")
-NUMBER_ITEMS=50000
+OUTPUT_DIRS=("classification_data_single" "pretrain_data" "classification_data" "finetune_data")
+NUMBER_ITEMS=100000
 
 # Step 3: Run metadata extraction for each output directory
 for OUTPUT_DIR in "${OUTPUT_DIRS[@]}"; do
