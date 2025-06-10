@@ -5,7 +5,27 @@ class RecformerTokenizer(LongformerTokenizer):
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, config=None):
         cls.config = config
-        return super().from_pretrained(pretrained_model_name_or_path)
+        tokenizer = super().from_pretrained(pretrained_model_name_or_path)
+
+        # Add custom tokens for financial transactions
+        custom_tokens = []
+    
+        #Month Tokens
+        months = [f'[MONTH_{i}]' for i in range(1, 13)]
+        custom_tokens.extend(months)
+
+        # Day tokens (1-31)
+        days = [f'[DAY_{i}]' for i in range(1, 32)]
+        custom_tokens.extend(days)
+
+        # Weekday tokens
+        weekdays = [f'[WEEKDAY_{i}]' for i in range(0, 7)]  # 0=Monday, 6=Sunday
+        custom_tokens.extend(weekdays)
+
+        #Add all custom tokens to the tokenizer
+        tokenizer.add_tokens(custom_tokens)
+
+        return tokenizer
         
     def __call__(self, items, pad_to_max=False, return_tensor=False):
         '''
@@ -34,31 +54,91 @@ class RecformerTokenizer(LongformerTokenizer):
 
     def item_tokenize(self, text):
         return self.convert_tokens_to_ids(self.tokenize(text))
+    
 
-    def encode_item(self, item):
+    def get_month_token(self, month):
+        """Convert month (1-12) to token"""
+        return f'[MONTH_{month}]'
+    
+    def get_day_token(self, day):
+        """Convert day (1-31) to token"""
+        return f'[DAY_{day}]'
+    
+    def get_weekday_token(self, weekday):
+        """Convert weekday (0-6) to token"""
+        return f'[WEEKDAY_{weekday}]'
+    
+    def item_tokenize(self, text):
+        """Tokenize text - handles both regular text and special tokens"""
+        if isinstance(text, str) and text.startswith('[') and text.endswith(']'):
+            # This is a special token
+            return self.convert_tokens_to_ids([text])
+        else:
+            # Regular text tokenization
+            return self.convert_tokens_to_ids(self.tokenize(str(text)))
+        
 
+    def encode_item(self, transaction):
+        """
+        Encode a transaction item with special handling for financial features
+        
+        transaction should be a dict like:
+        {
+            'amount': [AMOUTN_10-200],
+            'month': 3,
+            'day': 15,
+            'weekday': 2,
+            'merchant': 'Coffee shop purchase'
+        }
+        """
         input_ids = []
         token_type_ids = []
-        item = list(item.items())[:self.config.max_attr_num]  # truncate attribute number
+        transaction = dict(list(transaction.items())[:self.config.max_attr_num])
+        
+        # Process each attribute with special handling
+        processed_attrs = []
 
-        for attribute in item:
+        if 'amount' in transaction:
+            # Description uses regular tokenization
+            processed_attrs.append(('amount', transaction["amount"]))
 
-            attr_name, attr_value = attribute
+        if 'month' in transaction:
+            month_token = self.get_month_token(transaction["month"])
+            processed_attrs.append(('month', month_token))
+        
+        if 'day' in transaction:
+            day_token = self.get_day_token(transaction["day"])
+            processed_attrs.append(('day', day_token))
+        
+        if 'weekday' in transaction:
+            weekday_token = self.get_weekday_token(transaction["weekday"])
+            processed_attrs.append(('weekday', weekday_token))
+        
+        if 'merchant' in transaction:
+            # Description uses regular tokenization
+            processed_attrs.append(('merchant', transaction["merchant"]))
 
+        
+        # Truncate to max attributes
+        processed_attrs = processed_attrs[:self.config.max_attr_num]
+        
+        # Encode each attribute
+        for attr_name, attr_value in processed_attrs:
             name_tokens = self.item_tokenize(attr_name)
             value_tokens = self.item_tokenize(attr_value)
-
+            
             attr_tokens = name_tokens + value_tokens
             attr_tokens = attr_tokens[:self.config.max_attr_length]
-
+            
             input_ids += attr_tokens
             
             attr_type_ids = [1] * len(name_tokens)
             attr_type_ids += [2] * len(value_tokens)
             attr_type_ids = attr_type_ids[:self.config.max_attr_length]
             token_type_ids += attr_type_ids
-
+        
         return input_ids, token_type_ids
+         
 
 
     def encode(self, items, encode_item=True):
@@ -159,60 +239,94 @@ class RecformerTokenizer(LongformerTokenizer):
         return self.padding(item_batch, pad_to_max)
         
 
-
 if __name__ == "__main__":
 
+    # from models import RecformerConfig
+
+
+    # config = RecformerConfig.from_pretrained("allenai/longformer-base-4096")
+    # tokenizer = RecformerTokenizer.from_pretrained("allenai/longformer-base-4096", config=config)
+
+    # items1 = [{'pt': 'PUZZLES',
+    #         'material': 'Cardboard++Cartón',
+    #         'item_dimensions': '27 x 20 x 0.1 inches',
+    #         'number_of_pieces': '1000',
+    #         'brand': 'Galison++',
+    #         'number_of_items': '1',
+    #         'model_number': '9780735366763',
+    #         'size': '1000++',
+    #         'theme': 'Christmas++',
+    #         'color': 'Dresden'},
+    #         {'pt': 'DECORATIVE_SIGNAGE',
+    #         'item_shape': 'Square++Cuadrado',
+    #         'brand': 'Generic++',
+    #         'color': 'Square-5++Cuadrado-5',
+    #         'mounting_type': 'Wall Mount++',
+    #         'material': 'Wood++Madera'}]
+    # items2 = [{'pt': 'WALL_ART',
+    #         'number_of_items': '1',
+    #         'mounting_type': 'Wall Mount++',
+    #         'item_shape': 'Rectangular++',
+    #         'brand': "Teacher's Discovery++",
+    #         'color': '_++'},
+    #         {'pt': 'CALENDAR',
+    #         'theme': 'Funny, Love, Wedding++',
+    #         'format': 'wall_calendar',
+    #         'model_year': '2022',
+    #         'brand': 'CALVENDO++',
+    #         'size': 'Square++cuadrado',
+    #         'material': 'Paper, Wool++'},
+    #         {'pt': 'BLANK_BOOK',
+    #         'number_of_items': '1',
+    #         'color': 'Hanging Flowers++Flores colgantes',
+    #         'brand': 'Graphique++',
+    #         'ruling_type': 'Ruled++',
+    #         'binding': 'office_product',
+    #         'paper_size': '6.25 x 8.25 inches++',
+    #         'style': 'Hanging Flowers'}]
+
+    # inputs = tokenizer(items1)
+    # print(inputs)
+    # print(tokenizer.convert_ids_to_tokens(inputs['input_ids']))
+
     from models import RecformerConfig
-
-
+    
     config = RecformerConfig.from_pretrained("allenai/longformer-base-4096")
     tokenizer = RecformerTokenizer.from_pretrained("allenai/longformer-base-4096", config=config)
 
-    items1 = [{'pt': 'PUZZLES',
-            'material': 'Cardboard++Cartón',
-            'item_dimensions': '27 x 20 x 0.1 inches',
-            'number_of_pieces': '1000',
-            'brand': 'Galison++',
-            'number_of_items': '1',
-            'model_number': '9780735366763',
-            'size': '1000++',
-            'theme': 'Christmas++',
-            'color': 'Dresden'},
-            {'pt': 'DECORATIVE_SIGNAGE',
-            'item_shape': 'Square++Cuadrado',
-            'brand': 'Generic++',
-            'color': 'Square-5++Cuadrado-5',
-            'mounting_type': 'Wall Mount++',
-            'material': 'Wood++Madera'}]
-    items2 = [{'pt': 'WALL_ART',
-            'number_of_items': '1',
-            'mounting_type': 'Wall Mount++',
-            'item_shape': 'Rectangular++',
-            'brand': "Teacher's Discovery++",
-            'color': '_++'},
-            {'pt': 'CALENDAR',
-            'theme': 'Funny, Love, Wedding++',
-            'format': 'wall_calendar',
-            'model_year': '2022',
-            'brand': 'CALVENDO++',
-            'size': 'Square++cuadrado',
-            'material': 'Paper, Wool++'},
-            {'pt': 'BLANK_BOOK',
-            'number_of_items': '1',
-            'color': 'Hanging Flowers++Flores colgantes',
-            'brand': 'Graphique++',
-            'ruling_type': 'Ruled++',
-            'binding': 'office_product',
-            'paper_size': '6.25 x 8.25 inches++',
-            'style': 'Hanging Flowers'}]
+    # with open('/Users/Nora_Hallqvist/Code/RecFormer/transactional_data_process/pretrain_data/meta_data.json', 'r') as f:
+    #     data = json.load(f)
 
-    inputs = tokenizer(items1)
-    print(inputs)
-    print(tokenizer.convert_ids_to_tokens(inputs['input_ids']))
-    # print(len(inputs['input_ids']))
+    # first_key = next(iter(data))
+    # transactions = [data[first_key]]
+    # print(transactions)
 
-    # inputs = tokenizer([items1, items2])
-    # print(inputs)
     
 
-        
+    transactions = [
+        {
+            'amount': '[AMOUTN_10_20]',
+            'month': 3,
+            'day': 15,
+            'weekday': 2,
+            'merchant': 'Coffee shop purchase'
+        },
+        {
+            'amount': '[AMOUTN_20_30]',
+            'month': 3,
+            'day': 14,
+            'weekday': 1,
+            'merchant': 'ATM withdrawal'
+        }
+    ]
+    
+    # Encode the transactions
+    encoded = tokenizer(transactions)
+    print("Encoded transactions:", encoded)
+    
+    # Check vocabulary size after adding custom tokens
+    print(f"Vocabulary size: {len(tokenizer)}")
+    
+    # Test individual token conversion
+    print("Month token:", tokenizer.get_month_token(3))
+    print("Month token:", tokenizer.get_day_token(3))

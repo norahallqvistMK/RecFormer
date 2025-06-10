@@ -308,7 +308,6 @@ def calculate_pos_weight_from_dataset(dataset: DataLoader, label_key:str="labels
         batch_labels = batch[label_key]
         labels.extend(batch_labels.tolist())
 
-    print("labels", labels)
     labels = torch.tensor(labels, dtype=torch.float32)
     fraud_ratio = labels.mean().item()
     non_fraud_ratio = 1.0 - fraud_ratio
@@ -470,9 +469,9 @@ def main():
     #Start training
     for epoch in range(args.num_train_epochs):
 
-        #encode the items for each epoch
-        item_embeddings = encode_all_items(model.longformer, tokenizer, tokenized_items, args)
-        model.init_item_embedding(item_embeddings)
+        # #encode the items for each epoch
+        # item_embeddings = encode_all_items(model.longformer, tokenizer, tokenized_items, args)
+        # model.init_item_embedding(item_embeddings)
 
         # Train an epoch
         avg_train_loss = train_one_epoch(model, train_loader, optimizer, scheduler, scaler, args)

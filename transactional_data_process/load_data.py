@@ -7,6 +7,7 @@ import os
 import json
 from pathlib import Path
 
+
 def save_metadata_to_json(metadata, output_path):
     dir_name = os.path.dirname(output_path)
     if dir_name:
@@ -15,7 +16,7 @@ def save_metadata_to_json(metadata, output_path):
         json.dump(metadata, f, indent=4)
     print(f"Metadata saved to {output_path}")
 
-def get_amt_bins(df: pd.DataFrame, number_bins: int = 1000, min_amt: int = 0, max_amt: int = 10000):
+def get_amt_bins(df: pd.DataFrame, number_bins: int = 1000, min_amt: int = 0, max_amt: int = 30000):
     """
     Create a mapping of amount bins to token IDs.
     
@@ -45,12 +46,13 @@ def get_amt_bins(df: pd.DataFrame, number_bins: int = 1000, min_amt: int = 0, ma
         left = amount_bins[i - 1]
         right = amount_bins[i]
         if np.isinf(right):
-            label = f"{left}-inf"
+            #[] is needed to indicate it is a special token later in the tokeniser
+            label = f"[AMOUNT_{left}-PLUS]"
         else:
-            label = f"{left}-{right}"
+            label = f"[AMOUNT_{left}-{right}]"
         bin_labels.append(label)
 
-    token_dict = {label: f"amt_bin_{idx}" for idx, label in enumerate(bin_labels)}
+    token_dict = {label: f"{idx}" for idx, label in enumerate(bin_labels)}
     save_metadata_to_json(token_dict, 'data/amt_bins.json')
     
     return amount_bins, bin_labels
@@ -202,13 +204,13 @@ def preprocess_data_without_encoding(
         right=False  # [left, right) intervals
     )
 
-    df_processed['year'] = df_processed['trans_date_trans_time'].dt.year.fillna(0).astype(str)
-    df_processed['month'] = df_processed['trans_date_trans_time'].dt.month.fillna(0).astype(str)
-    df_processed['day'] = df_processed['trans_date_trans_time'].dt.day.fillna(0).astype(str)
-    df_processed['day_of_week'] = df_processed['trans_date_trans_time'].dt.dayofweek.fillna(0).astype(str)
-    df_processed['hour'] = df_processed['trans_date_trans_time'].dt.hour.fillna(0).astype(str)
+    df_processed['year'] = df_processed['trans_date_trans_time'].dt.year.fillna(0).astype(int)
+    df_processed['month'] = df_processed['trans_date_trans_time'].dt.month.fillna(0).astype(int)
+    df_processed['day'] = df_processed['trans_date_trans_time'].dt.day.fillna(0).astype(int)
+    df_processed['day_of_week'] = df_processed['trans_date_trans_time'].dt.dayofweek.fillna(0).astype(int)
+    df_processed['hour'] = df_processed['trans_date_trans_time'].dt.hour.fillna(0).astype(int)
     
-    features_for_transaction_type = ["amt_bin", "merchant", "year", "month", "day", "day_of_week"]
+    features_for_transaction_type = ["amt_bin", "merchant", "month", "day", "day_of_week"]
     concat_parts = [df_processed[feature].astype(str).replace('nan', 'missing') for feature in features_for_transaction_type]
     df_processed["transaction_signature"] = pd.concat(concat_parts, axis=1).agg('_'.join, axis=1)
     

@@ -12,7 +12,6 @@ def extract_metadata(df):
     meta_columns = {
         "amount": "amt_bin",
         "merchant": "merchant", 
-        "year": "year",
         "month": "month",
         "day": "day",
         "weekday": "day_of_week"
@@ -25,12 +24,13 @@ def extract_metadata(df):
     if missing_cols:
         print(f"Warning: Missing columns: {missing_cols}")
     
-    # Extract metadata per transaction type
+
     metadata = {}
     for trans_id, group in df.groupby("transaction_type_id"):
         first_row = group.iloc[0]
         metadata[trans_id] = {
-            key: str(first_row[col]) for key, col in available_cols.items()
+            key: int(first_row[col]) if pd.api.types.is_numeric_dtype(type(first_row[col])) else str(first_row[col])
+            for key, col in available_cols.items()
         }
     
     print(f"Extracted metadata for {len(metadata)} transaction types")
