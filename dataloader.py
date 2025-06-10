@@ -57,7 +57,7 @@ class RecformerEvalDataset(Dataset):
 
 
 class RecformerFraudDataset(Dataset):
-    def __init__(self, user_sequences, collator: FinetuneDataCollatorWithPadding):
+    def __init__(self, user_sequences, collator):
 
         '''
         user2train: dict of sequence data, user--> item sequence

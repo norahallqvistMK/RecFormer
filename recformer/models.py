@@ -1,6 +1,8 @@
 import logging
 from typing import List, Union, Optional, Tuple
 from dataclasses import dataclass
+import torch.nn.functional as F
+
 
 import torch
 import torch.nn as nn
@@ -596,6 +598,37 @@ class RecformerForSeqRec(LongformerPreTrainedModel):
 
         return loss
 
+class FocalLoss(nn.Module):
+    """
+    Focal Loss for addressing class imbalance
+    """
+    def __init__(self, alpha=1, gamma=2, pos_weight=None):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+        self.pos_weight = pos_weight
+    
+    def forward(self, inputs, targets):
+        # Apply sigmoid to get probabilities
+        probs = torch.sigmoid(inputs)
+        
+        # Calculate cross entropy
+        ce_loss = F.binary_cross_entropy_with_logits(
+            inputs, targets, pos_weight=self.pos_weight, reduction='none'
+        )
+        
+        # Calculate focal weight
+        p_t = probs * targets + (1 - probs) * (1 - targets)
+        focal_weight = (1 - p_t) ** self.gamma
+        
+        # Apply alpha weighting
+        if self.alpha is not None:
+            alpha_t = self.alpha * targets + (1 - self.alpha) * (1 - targets)
+            focal_loss = alpha_t * focal_weight * ce_loss
+        else:
+            focal_loss = focal_weight * ce_loss
+        
+        return focal_loss.mean()
 
 class RecformerForFraudDetection(LongformerPreTrainedModel):
     def __init__(self, config: RecformerConfig):
@@ -605,13 +638,29 @@ class RecformerForFraudDetection(LongformerPreTrainedModel):
         
         # Binary for predicting fraud
         self.dropout = nn.Dropout(config.hidden_dropout_prob if hasattr(config, 'hidden_dropout_prob') else 0.1)
-        self.classifier = nn.Linear(config.hidden_size, 1)  # 2 classes: fraud (1) and not fraud (0)
+        # self.classifier = nn.Linear(config.hidden_size, 1)  # 2 classes: fraud (1) and not fraud (0)
+        hidden_size = config.hidden_size
+        self.classifier = nn.Sequential(
+                nn.Linear(hidden_size, hidden_size // 2),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(hidden_size // 2, hidden_size // 4),
+                nn.ReLU(),
+                nn.Dropout(0.2),
+                nn.Linear(hidden_size // 4, 1)
+            )
         
         # BCEWithLogitsLoss will use pos_weight from config (a single float tensor)
         self.pos_weight = torch.tensor(config.pos_weight) if hasattr(config, "pos_weight") else torch.tensor(1.0)
         
         # Initialize weights and apply final processing
         self.post_init()
+    
+    def init_item_embedding(self, embeddings: Optional[torch.Tensor] = None):
+        self.item_embedding = nn.Embedding(num_embeddings=self.config.item_num, embedding_dim=self.config.hidden_size)
+        if embeddings is not None:
+            self.item_embedding = nn.Embedding.from_pretrained(embeddings, freeze=True)
+            print('Initalize item embeddings from vectors.')
 
     def forward(self,
                 input_ids: Optional[torch.Tensor] = None,
@@ -645,23 +694,20 @@ class RecformerForFraudDetection(LongformerPreTrainedModel):
         )
 
         pooler_output = outputs.pooler_output  # (batch_size, hidden_size)
-        
         # Apply dropout and classification head
         pooler_output = self.dropout(pooler_output)
-        logits = self.classifier(pooler_output).squeeze(-1)  # (batch_size,)  # (batch_size, 2)
+        logits = self.classifier(pooler_output).squeeze(-1)  # (batch_size,)  
 
         loss = None
         if labels is not None:
             labels = labels.float() # BCEWithLogitsLoss expects float labels
             pos_weight = self.pos_weight.to(logits.device)
             loss_fct = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+            # loss_fct = FocalLoss(alpha=0.6, gamma=2)
+
             loss = loss_fct(logits, labels) 
-
-        # if not return_dict:
-        #     output = (logits,) + outputs[2:]
-        #     return ((loss,) + output) if loss is not None else output
-
+        
         if not return_dict:
-            return (loss, logits) if loss is not None else logits
+            return (loss, logits)
 
         return {"loss": loss, "logits": logits}

@@ -1,59 +1,44 @@
-import pandas as pd
-import sys
-from typing import List
-from helper import save_metadata_to_json
 import json
+import os
+import random
+import argparse
+from collections import defaultdict
+import pandas as pd
+from tqdm import tqdm
 
-def extract_interaction_from_file(
-    df: pd.DataFrame, 
-    json_meta_path: str,
-    group_col: str = "cc_num"
-) -> List[List[int]]:
-    """
-    Extract ordered lists of transaction_type_id per group from a CSV or Parquet file,
-    filtered by transaction_type_ids provided in a JSON metadata file.
-
-    Parameters:
-    -----------
-    df : dataframe 
-    json_meta_path : str
-        Path to a JSON file containing a dictionary where keys are valid transaction_type_ids.
-    group_col : str
-        Column name to group by (default: "cc_num").
-
-    Returns:
-    --------
-    List[List[int]]
-        List of ordered transaction_type_id sequences (one per group), 
-        only including groups with at least one transaction_type_id in the JSON keys.
-    """
-    # Load metadata
-    try:
-        with open(json_meta_path, "r") as f:
-            meta_data = json.load(f)
-            valid_type_ids = set(str(k) for k in meta_data.keys())
-        print(f"Loaded metadata from {json_meta_path}. Found {len(valid_type_ids)} valid transaction_type_ids.")
-    except Exception as e:
-        print(f"Error reading metadata file {json_meta_path}: {e}")
-        sys.exit(1)
-
+def extract_sequences(df, meta_dict=None, group_col="cc_num"):
+    """Extract transaction sequences per group from CSV file - optimized version."""
     
-    required_cols = {group_col, 'transaction_type_id', 'trans_date_trans_time'}
-    if not required_cols.issubset(df.columns):
-        print(f"Missing one or more required columns: {required_cols}")
-        sys.exit(1)
+    if meta_dict is None:
+        valid_transactions = set()
+    else:
+        valid_transactions = set(meta_dict.keys())
     
-    # Group, sort, filter, and extract sequences
+    # Pre-filter the dataframe if metadata is provided
+    if valid_transactions:
+        df_filtered = df[df['transaction_type_id'].isin(valid_transactions)]
+    else:
+        df_filtered = df
+    
+    # Sort once for the entire dataframe
+    df_sorted = df_filtered.sort_values(['cc_num', 'trans_date_trans_time'])
+    
+    # Group and process using vectorized operations
     sorted_sequences = []
-    for _, group in df.groupby(group_col):
-        sorted_group = group.sort_values(by='trans_date_trans_time')
-        sequence = sorted_group['transaction_type_id'].tolist()
-        valid_sequence_ids = [s for s in sequence if s in valid_type_ids]
-        sorted_sequences.append(valid_sequence_ids)
-
-    print(f"Extracted {len(sorted_sequences)} filtered sequences based on '{group_col}'.")
+    for group_id, group in df_sorted.groupby(group_col):
+        sorted_sequence = group['transaction_type_id'].tolist()
+        #need to be at least 2 to be a sequence
+        if len(sorted_sequence)>2:
+            sorted_sequences.append(sorted_sequence)
+    
+    print(f"Extracted {len(sorted_sequences)} sequences")
     return sorted_sequences
 
+
+def save_json(data, filepath):
+    """Save data to JSON file."""
+    with open(filepath, 'w', encoding='utf8') as f:
+        json.dump(data, f)
 
 def get_dataframe(train_path:str ,test_path:str = None):
     # Read both datasets
@@ -65,25 +50,44 @@ def get_dataframe(train_path:str ,test_path:str = None):
 
     return df
 
-
 def main():
-    input_file_path_train = '../../data/02_process/credit_card_transaction_train_processed.csv'
-    # input_file_path_test = '../../data/02_process/credit_card_transaction_test_processed.csv'
-
-    df = get_dataframe(train_path=input_file_path_train)
+    # Parse arguments
+    file_path_train = "../../data/02_process/credit_card_transaction_train_processed.csv"
+    # file_path_test = "../../data/02_process/credit_card_transaction_test_processed.csv"
+    output_path = "."
     meta_data_path = "meta_data.json"
 
-    all_sequences = extract_interaction_from_file(df, meta_data_path)
+    df = get_dataframe(file_path_train)
+    
+    # Create output directory
+    os.makedirs(output_path, exist_ok=True)
+    
+    # Extract data meta data
+    print("Getting metadata...")
+    with open(meta_data_path, "r", encoding="utf-8") as f:
+        metadata = json.load(f)
+    
+    print("Extracting sequences...")
+    all_sequences = extract_sequences(df, metadata)
+
+    # Encode labels
+
     train_idx = int(len(all_sequences) * 0.85)
     train_sequences = all_sequences[:train_idx]
     val_sequences = all_sequences[train_idx:]
-    
-    print(f"Total sequences: {len(all_sequences)}")
-    print(f"Training sequences: {len(train_sequences)}, Validation sequences: {len(val_sequences)}")
 
-    # Save the sequences to files
-    save_metadata_to_json(train_sequences, 'train.json')
-    save_metadata_to_json(val_sequences, 'dev.json')
+    print(f'Train: {len(train_sequences)}, '
+          f'Dev: {len(val_sequences)}')
+    
+    # Save all files
+    output_files = {
+        'train.json': train_sequences,
+        'dev.json': val_sequences}
+    
+    for filename, data in output_files.items():
+        filepath = os.path.join(output_path, filename)
+        save_json(data, filepath)
+        print(f"Saved {filename}")
 
 if __name__ == "__main__":
     main()

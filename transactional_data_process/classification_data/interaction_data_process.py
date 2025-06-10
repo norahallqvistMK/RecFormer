@@ -22,39 +22,6 @@ class LabelField:
 
         return self.label2id[label]
 
-def extract_metadata(file_path):
-    """Extract metadata for each transaction type from CSV file."""
-    df = pd.read_csv(file_path, nrows=100000)
-    print(f"Loaded metadata from {file_path}, shape: {df.shape}")
-    
-    # Define metadata columns to extract
-    meta_columns = {
-        "amount": "amt_bin",
-        "merchant": "merchant", 
-        "year": "year",
-        "month": "month",
-        "day": "day",
-        "weekday": "day_of_week"
-    }
-    
-    # Get available columns
-    available_cols = {k: v for k, v in meta_columns.items() if v in df.columns}
-    missing_cols = [v for v in meta_columns.values() if v not in df.columns]
-    
-    if missing_cols:
-        print(f"Warning: Missing columns: {missing_cols}")
-    
-    # Extract metadata per transaction type
-    metadata = {}
-    for trans_id, group in df.groupby("transaction_type_id"):
-        first_row = group.iloc[0]
-        metadata[trans_id] = {
-            key: str(first_row[col]) for key, col in available_cols.items()
-        }
-    
-    print(f"Extracted metadata for {len(metadata)} transaction types")
-    return metadata
-
 
 def extract_sequences(df, meta_dict=None, group_col="cc_num"):
     """Extract transaction sequences per group from CSV file - optimized version."""
@@ -80,7 +47,7 @@ def extract_sequences(df, meta_dict=None, group_col="cc_num"):
         trans_ids = group['transaction_type_id'].tolist()
         fraud_flags = group['is_fraud'].tolist()
         
-        if trans_ids and fraud_flags:
+        if len(trans_ids)>1 and fraud_flags:
             # Use any() for faster fraud detection
             has_fraud = 1 if any(fraud_flags) else 0
             sequences[group_id] = [trans_ids, [has_fraud]]

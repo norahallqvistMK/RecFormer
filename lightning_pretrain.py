@@ -124,7 +124,12 @@ def main():
 
     model = LitWrapper(pytorch_model, learning_rate=args.learning_rate)
 
-    checkpoint_callback = ModelCheckpoint(save_top_k=5, monitor="accuracy", mode="max", filename="{epoch}-{accuracy:.4f}")
+    checkpoint_callback = ModelCheckpoint(
+        save_top_k=5, 
+        monitor="val_loss",  # or just "loss" depending on your logging
+        mode="min",          # "min" because lower loss is better
+        filename="{epoch}-{val_loss:.4f}"
+    )     
     
     trainer = Trainer(accelerator="gpu",
                       max_epochs=args.num_train_epochs,

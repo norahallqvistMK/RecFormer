@@ -7,14 +7,16 @@ from pathlib import Path
 from argparse import ArgumentParser
 from torch.utils.data import DataLoader
 from torch.cuda.amp import autocast
-from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, balanced_accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, roc_auc_score, balanced_accuracy_score, confusion_matrix
 from pytorch_lightning import seed_everything
+import numpy as np
 
 from utils import read_json
 from optimization import create_optimizer_and_scheduler
-from recformer import RecformerModel, RecformerTokenizer, RecformerConfig, RecformerForFraudDetection
-from collator import EvalDataCollatorWithPadding
+from recformer import RecformerTokenizer, RecformerConfig, RecformerForFraudDetection
+from collator import FinetuneDataCollatorWithPaddingFraud, EvalDataCollatorWithPadding
 from dataloader import RecformerFraudDataset
+import torch.nn as nn
 
 
 def load_data(args):
@@ -35,31 +37,103 @@ def load_data(args):
     return train, val, test, item_meta_dict_filted, item2id, id2item
 
 
-def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
+# def encode_all_items(model: RecformerModel, tokenizer: RecformerTokenizer, tokenized_items, args):
 
+#     model.eval()
+
+#     items = sorted(list(tokenized_items.items()), key=lambda x: x[0])
+#     items = [ele[1] for ele in items]
+
+#     item_embeddings = []
+
+#     with torch.no_grad():
+#         for i in tqdm(range(0, len(items), args.batch_size), ncols=100, desc='Encode all items'):
+
+#             item_batch = [[item] for item in items[i:i+args.batch_size]]
+
+#             inputs = tokenizer.batch_encode(item_batch, encode_item=False)
+
+#             for k, v in inputs.items():
+#                 inputs[k] = torch.LongTensor(v).to(args.device)
+
+#             outputs = model(**inputs)
+
+#             item_embeddings.append(outputs.pooler_output.detach())
+
+#     item_embeddings = torch.cat(item_embeddings, dim=0)#.cpu()
+
+#     return item_embeddings
+
+def encode_all_items(model: RecformerForFraudDetection, tokenizer: RecformerTokenizer, tokenized_items, args):
+    """
+    Encode items using multiple GPUs to prevent CUDA OOM
+    """
     model.eval()
-
+    
+    # Get available GPUs
+    num_gpus = torch.cuda.device_count()
+    print(f"Using {num_gpus} GPUs for item encoding")
+    
+    # Wrap model with DataParallel for multi-GPU inference
+    model.to(args.device)
+    if not isinstance(model, nn.DataParallel):
+        model = nn.DataParallel(model)
+    
     items = sorted(list(tokenized_items.items()), key=lambda x: x[0])
     items = [ele[1] for ele in items]
-
+    
     item_embeddings = []
-
+    
+    # Adjust batch size for multi-GPU (multiply by number of GPUs)
+    effective_batch_size = args.batch_size * num_gpus
+    
     with torch.no_grad():
-        for i in tqdm(range(0, len(items), args.batch_size), ncols=100, desc='Encode all items'):
-
-            item_batch = [[item] for item in items[i:i+args.batch_size]]
-
+        for i in tqdm(range(0, len(items), effective_batch_size), ncols=100, desc=f'Encode all items (Multi-GPU: {num_gpus})'):
+            
+            item_batch = [[item] for item in items[i:i+effective_batch_size]]
+            
+            if len(item_batch) == 0:
+                continue
+                
             inputs = tokenizer.batch_encode(item_batch, encode_item=False)
-
+            
             for k, v in inputs.items():
                 inputs[k] = torch.LongTensor(v).to(args.device)
-
-            outputs = model(**inputs)
-
-            item_embeddings.append(outputs.pooler_output.detach())
-
-    item_embeddings = torch.cat(item_embeddings, dim=0)#.cpu()
-
+            
+            try:
+                outputs = model(**inputs)
+                item_embeddings.append(outputs.pooler_output.detach().cpu())  # Move to CPU immediately
+                
+                # Clear GPU cache periodically
+                if i % (effective_batch_size * 10) == 0:
+                    torch.cuda.empty_cache()
+                    
+            except RuntimeError as e:
+                if "out of memory" in str(e):
+                    print(f"CUDA OOM at batch {i}, reducing batch size and retrying...")
+                    torch.cuda.empty_cache()
+                    
+                    # Process this batch with smaller chunks
+                    chunk_size = max(1, len(item_batch) // (num_gpus * 2))
+                    for j in range(0, len(item_batch), chunk_size):
+                        chunk = item_batch[j:j+chunk_size]
+                        if len(chunk) == 0:
+                            continue
+                            
+                        chunk_inputs = tokenizer.batch_encode(chunk, encode_item=False)
+                        for k, v in chunk_inputs.items():
+                            chunk_inputs[k] = torch.LongTensor(v).to(args.device)
+                        
+                        chunk_outputs = model(**chunk_inputs)
+                        item_embeddings.append(chunk_outputs.pooler_output.detach().cpu())
+                        
+                    torch.cuda.empty_cache()
+                else:
+                    raise e
+    
+    # Concatenate all embeddings and move back to original device
+    item_embeddings = torch.cat(item_embeddings, dim=0).to(args.device)
+    
     return item_embeddings
 
 
@@ -71,63 +145,66 @@ def eval_fraud(model, dataloader, args):
     all_predictions = []
     all_labels = []
     all_probabilities = []
-    total_loss = 0.0
-    num_batches = 0
-
-    for batch in tqdm(dataloader, ncols=100, desc='Evaluate'):
+    
+    for batch, labels in tqdm(dataloader, ncols=100, desc='Evaluate'):
         
-        # Move batch to device
-        input_ids = batch['input_ids'].to(args.device)
-        attention_mask = batch['attention_mask'].to(args.device)
-        labels = batch['labels'].to(args.device)
+        for k, v in batch.items():
+            batch[k] = v.to(args.device)
+        labels = labels.to(args.device)
         
-        if 'global_attention_mask' in batch:
-            global_attention_mask = batch['global_attention_mask'].to(args.device)
-        else:
-            global_attention_mask = None
-
         with torch.no_grad():
-            outputs = model(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                global_attention_mask=global_attention_mask,
-                labels=labels,
-                return_dict=True
-            )
+            outputs = model(**batch)
             
-            loss = outputs['loss']
-            logits = outputs['logits']
+            logits = outputs['logits']  # Shape: [batch_size, 1] or [batch_size]
             
-            # Get predictions and probabilities
-            probabilities = torch.softmax(logits, dim=-1)
-            predictions = torch.argmax(logits, dim=-1)
+            # Flatten if needed
+            if logits.dim() == 2:
+                logits = logits.squeeze(-1)  # Remove last dimension if it's 1
             
-            all_predictions.extend(predictions.cpu().numpy())
+            # Convert logits to probabilities using sigmoid for binary classification
+            probabilities = torch.sigmoid(logits)
+            
             all_labels.extend(labels.cpu().numpy())
-            all_probabilities.extend(probabilities[:, 1].cpu().numpy())  # Fraud probability
-            
-            total_loss += loss.item()
-            num_batches += 1
+            all_probabilities.extend(probabilities.cpu().numpy())  # Fraud probability
+    
+    # Convert to numpy arrays
+    all_probabilities = np.array(all_probabilities)
+    all_labels = np.array(all_labels)
+    
+    # Find optimal threshold using F1 score for imbalanced dataset
+    thresholds = np.arange(0.1, 0.9, 0.05)
+    best_f1 = 0
+    optimal_threshold = 0.5
 
+    for threshold in thresholds:
+        binary_pred = (all_probabilities > threshold).astype(int)
+        f1 = f1_score(all_labels, binary_pred, zero_division=0)
+        if f1 > best_f1:
+            best_f1 = f1
+            optimal_threshold = threshold
+
+    # Convert predictions to binary classifications using optimal threshold
+    all_predictions = (all_probabilities > optimal_threshold).astype(int)
+            
     # Calculate metrics
-    avg_loss = total_loss / num_batches
     accuracy = accuracy_score(all_labels, all_predictions)
     balanced_accuracy = balanced_accuracy_score(all_labels, all_predictions)
     precision = precision_score(all_labels, all_predictions, zero_division=0)
     recall = recall_score(all_labels, all_predictions, zero_division=0)
     f1 = f1_score(all_labels, all_predictions, zero_division=0)
     auc = roc_auc_score(all_labels, all_probabilities)
-
+    cm = confusion_matrix(all_labels, all_predictions)
+    
     metrics = {
-        'loss': avg_loss,
         'accuracy': accuracy,
         "balanced_accuracy": balanced_accuracy,
         'precision': precision,
         'recall': recall,
         'f1': f1,
-        'auc': auc
+        'auc': auc,
+        'optimal_threshold': optimal_threshold, 
+        "cm": cm
     }
-
     return metrics
 
 def train_one_epoch(model, dataloader, optimizer, scheduler, scaler, args):
@@ -138,6 +215,7 @@ def train_one_epoch(model, dataloader, optimizer, scheduler, scaler, args):
     num_batches = 0
 
     for step, batch in enumerate(tqdm(dataloader, ncols=100, desc='Training')):
+
         for k, v in batch.items():
             batch[k] = v.to(args.device)
 
@@ -199,7 +277,7 @@ def _par_tokenize_doc(doc):
     return item_id, input_ids, token_type_ids
 
 
-def calculate_pos_weight_from_dataset(dataset: DataLoader, label_key:str="label"):
+def calculate_pos_weight_from_dataset(dataset: DataLoader, label_key:str="labels", factor: int = 0.2):
     """
     Calculates fraud ratio, non-fraud ratio, and pos_weight for binary classification.
     
@@ -213,20 +291,22 @@ def calculate_pos_weight_from_dataset(dataset: DataLoader, label_key:str="label"
     labels = []
 
     for batch in dataset:
-        batch_labels = batch[label_key] if isinstance(batch, dict) else batch[1]
+        batch_labels = batch[label_key]
         labels.extend(batch_labels.tolist())
 
+    print("labels", labels)
     labels = torch.tensor(labels, dtype=torch.float32)
     fraud_ratio = labels.mean().item()
     non_fraud_ratio = 1.0 - fraud_ratio
     pos_weight = non_fraud_ratio / fraud_ratio if fraud_ratio > 0 else 0.0
+    scaled_pos_weight = pos_weight * factor
 
     print(
         f"Class distribution - Non-fraud: {non_fraud_ratio:.5f}, Fraud: {fraud_ratio:.5f}"
     )
-    print(f"Using pos_weight: {pos_weight:.2f} for fraud class")
+    print(f"Using pos_weight: {scaled_pos_weight:.2f} for fraud class")
 
-    return pos_weight
+    return scaled_pos_weight * factor
  
 def main():
     parser = ArgumentParser()
@@ -266,7 +346,8 @@ def main():
     args = parser.parse_args()
     print(args)
     seed_everything(42)
-    args.device = torch.device('cuda:{}'.format(args.device)) if args.device>=0 else torch.device('cpu')
+    # args.device = torch.device('cuda:{}'.format(args.device)) if args.device>=0 else torch.device('cpu')
+    args.device = torch.device('cuda:0') if args.device>=0 else torch.device('cpu')
 
     train, val, test, item_meta_dict, item2id, id2item = load_data(args)
 
@@ -316,11 +397,12 @@ def main():
     print(f'Successfully load {len(tokenized_items)} tokenized items.')
 
     #prepare data 
-    finetune_data_collator = EvalDataCollatorWithPadding(tokenizer, tokenized_items)
+    finetune_data_collator = FinetuneDataCollatorWithPaddingFraud(tokenizer, tokenized_items)
+    eval_data_collator = EvalDataCollatorWithPadding(tokenizer, tokenized_items)
 
     train_data = RecformerFraudDataset(train, collator=finetune_data_collator)
-    val_data = RecformerFraudDataset(val, collator=finetune_data_collator)
-    test_data = RecformerFraudDataset(test, collator=finetune_data_collator)
+    val_data = RecformerFraudDataset(val, collator=eval_data_collator)
+    test_data = RecformerFraudDataset(test, collator=eval_data_collator)
     
     train_loader = DataLoader(train_data, 
                               batch_size=args.batch_size, 
@@ -341,7 +423,7 @@ def main():
     pretrain_ckpt = torch.load(args.pretrain_ckpt)
     model.load_state_dict(pretrain_ckpt, strict=False)
     model.to(args.device)
-    
+
     #encode all the items (tokenise the transaction meta data)
     path_item_embeddings = dir_preprocess / f'item_embeddings_{path_corpus.name}'
     if path_item_embeddings.exists():
@@ -394,9 +476,9 @@ def main():
             epoch_metrics_log.append(log_entry)
 
             #save best model on balanced accuracy          
-            if dev_metrics['balanced_accuracy'] > best_target:
+            if dev_metrics['f1'] > best_target:
                 print('Save the best model.')
-                best_target = dev_metrics['balanced_accuracy']
+                best_target = dev_metrics['f1']
                 patience_counter = 0
                 torch.save(model.state_dict(), path_ckpt)
             
@@ -412,7 +494,8 @@ def main():
     print(f"Saved epoch metrics to {metrics_path}")
 
     print('Test with the best checkpoint.')  
-    model.load_state_dict(torch.load(path_ckpt))
+    checkpoint = torch.load(path_ckpt)
+    model.load_state_dict(checkpoint)
     test_metrics = eval_fraud(model, test_loader, args)
     print(f'Test set: {test_metrics}')
     
