@@ -372,6 +372,7 @@ def main():
     config.max_token_num = 1024
     config.item_num = len(item2id)
     tokenizer = RecformerTokenizer.from_pretrained(args.model_name_or_path, config)
+    config.vocab_size = len(tokenizer)
     
     global tokenizer_glb
     tokenizer_glb = tokenizer
@@ -433,6 +434,7 @@ def main():
 
     #load the model
     model = RecformerForFraudDetection(config)
+    model.longformer.resize_token_embeddings(config.vocab_size)
     pretrain_ckpt = torch.load(args.pretrain_ckpt)
     model.load_state_dict(pretrain_ckpt, strict=False)
     model.to(args.device)

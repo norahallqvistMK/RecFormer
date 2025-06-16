@@ -378,7 +378,7 @@ class RecformerForPretraining(LongformerPreTrainedModel):
         self.sim = Similarity(config)
         # Initialize weights and apply final processing
         self.post_init()
-
+    
     def forward(
         self,
         input_ids_a: Optional[torch.Tensor] = None,
@@ -655,6 +655,10 @@ class RecformerForFraudDetection(LongformerPreTrainedModel):
         
         # Initialize weights and apply final processing
         self.post_init()
+
+    def resize_token_embeddings(self, new_num_tokens: int):
+        """Resize input token embeddings matrix of the model."""
+        return self.longformer.resize_token_embeddings(new_num_tokens)
     
     def init_item_embedding(self, embeddings: Optional[torch.Tensor] = None):
         self.item_embedding = nn.Embedding(num_embeddings=self.config.item_num, embedding_dim=self.config.hidden_size)
@@ -711,3 +715,140 @@ class RecformerForFraudDetection(LongformerPreTrainedModel):
             return (loss, logits)
 
         return {"loss": loss, "logits": logits}
+
+if __name__ == "__main__":
+
+    from tokenization import RecformerTokenizer
+    model_name = "allenai/longformer-base-4096"
+    checkpoint = "../longformer_ckpt/longformer-base-4096.bin"
+    # config = RecformerConfig.from_pretrained(model_name)
+    # config.max_attr_num = 3
+    # config.max_attr_length = 32
+    # config.max_item_embeddings = 51  # 50 item and 1 for cls
+    # config.attention_window = [64] * 12
+    # config.max_token_num = 1024
+    # tokenizer = RecformerTokenizer.from_pretrained(model_name, config)
+    # config.vocab_size = len(tokenizer)
+
+    # model = RecformerForPretraining(config)
+    # model.load_state_dict(torch.load(checkpoint), strict=False)
+
+    # model.resize_token_embeddings(len(tokenizer))
+
+    # 1. Create config
+    # config = RecformerConfig.from_pretrained(model_name)
+    # config.max_attr_num = 3
+    # config.max_attr_length = 32
+    # config.max_item_embeddings = 51  # 50 item and 1 for cls
+    # config.attention_window = [64] * 12
+    # config.max_token_num = 1024
+    
+    # # 2. Create model with original vocab size
+    # model = RecformerForPretraining(config)
+
+    # # 3. Load pretrained weights first
+    # print("Loading pretrained weights...")
+    # model.load_state_dict(torch.load(checkpoint), strict=False)
+    # print("✓ Pretrained weights loaded")
+
+    # # 4. Create tokenizer with custom tokens
+    # print("Creating tokenizer with custom tokens...")
+    # tokenizer = RecformerTokenizer.from_pretrained(model_name, config)
+    # old_vocab_size = config.vocab_size
+    # new_vocab_size = len(tokenizer)
+    
+    # print(f"Original vocab size: {old_vocab_size}")
+    # print(f"New vocab size: {new_vocab_size}")
+    # print(f"Added {new_vocab_size - old_vocab_size} custom tokens")
+    
+    # # 5. Resize token embeddings using inherited method
+    # print("Resizing token embeddings...")
+    # model.longformer.resize_token_embeddings(new_vocab_size)
+    
+    # # 6. Update config vocab size
+    # config.vocab_size = new_vocab_size
+    # model.config.vocab_size = new_vocab_size
+
+
+    config = RecformerConfig.from_pretrained(model_name)
+    config.max_attr_num = 3
+    config.max_attr_length = 32
+    config.max_item_embeddings = 51  # 50 item and 1 for cls
+    config.attention_window = [64] * 12
+    config.max_token_num = 1024
+    
+    tokenizer = RecformerTokenizer.from_pretrained(model_name, config)
+
+    # # Get vocab sizes
+    # old_vocab_size = config.vocab_size
+    # new_vocab_size = len(tokenizer)
+    # print(f"Original vocab size: {old_vocab_size}")
+    # print(f"New vocab size: {new_vocab_size}")
+    # print(f"Added {new_vocab_size - old_vocab_size} custom tokens")
+
+    # # 1. Update config vocab size BEFORE creating model
+    # config.vocab_size = new_vocab_size
+
+    # # 2. Create model with updated config
+    # pytorch_model = RecformerForPretraining(config)
+
+    # # 3. Resize token embeddings BEFORE loading state dict
+    # print("Resizing token embeddings...")
+    # pytorch_model.longformer.resize_token_embeddings(new_vocab_size)
+
+    # # 4. Load pretrained weights (this will ignore size mismatches due to strict=False)
+    # pytorch_model.load_state_dict(torch.load(checkpoint), strict=False)
+
+    # # 5. Ensure config is consistent
+    # pytorch_model.config.vocab_size = new_vocab_size
+
+    old_vocab_size = config.vocab_size
+    new_vocab_size = len(tokenizer)
+    print(f"Original vocab size: {old_vocab_size}")
+    print(f"New vocab size: {new_vocab_size}")
+    print(f"Added {new_vocab_size - old_vocab_size} custom tokens")
+
+    # 1. Create model with original config
+    pytorch_model = RecformerForPretraining(config)
+
+    # 2. Load pretrained weights first
+    pytorch_model.load_state_dict(torch.load(checkpoint), strict=True)
+
+    # 3. Now resize token embeddings (this will preserve old weights and initialize new ones)
+    print("Resizing token embeddings...")
+    pytorch_model.longformer.resize_token_embeddings(new_vocab_size)
+
+    # 4. The resize_token_embeddings method should handle the LM head automatically
+    # But if it doesn't, manually resize it:
+    if hasattr(pytorch_model, 'lm_head'):
+        old_lm_head_weight = pytorch_model.lm_head.decoder.weight.data
+        old_lm_head_bias = pytorch_model.lm_head.decoder.bias.data if pytorch_model.lm_head.decoder.bias is not None else None
+        old_lm_bias = pytorch_model.lm_head.bias.data if pytorch_model.lm_head.bias is not None else None
+        
+        # Create new linear layer
+        pytorch_model.lm_head.decoder = torch.nn.Linear(
+            pytorch_model.lm_head.decoder.in_features,
+            new_vocab_size,
+            bias=pytorch_model.lm_head.decoder.bias is not None
+        )
+        
+        if hasattr(pytorch_model.lm_head, 'bias') and pytorch_model.lm_head.bias is not None:
+            pytorch_model.lm_head.bias = torch.nn.Parameter(torch.zeros(new_vocab_size))
+        
+        # Copy old weights
+        with torch.no_grad():
+            pytorch_model.lm_head.decoder.weight[:old_vocab_size] = old_lm_head_weight
+            if old_lm_head_bias is not None:
+                pytorch_model.lm_head.decoder.bias[:old_vocab_size] = old_lm_head_bias
+            if old_lm_bias is not None:
+                pytorch_model.lm_head.bias[:old_vocab_size] = old_lm_bias
+
+    # 5. Update config
+    config.vocab_size = new_vocab_size
+    pytorch_model.config.vocab_size = new_vocab_size
+
+    print("Model loaded and resized successfully!")
+
+
+
+

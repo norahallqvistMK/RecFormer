@@ -14,7 +14,7 @@ class RecformerTokenizer(LongformerTokenizer):
         # Add custom tokens for financial transactions
         custom_tokens = []
 
-        #Month Tokens
+        # Amount Tokens
         amount = []
         for i in range(NUM_AMOUNT_BINS):
             start = i * AMOUNT_INTERVAL_SIZE
@@ -24,7 +24,7 @@ class RecformerTokenizer(LongformerTokenizer):
         amount.append(f'[AMOUNT_{MAX_AMOUNT}_PLUS]')
         custom_tokens.extend(amount)
     
-        #Month Tokens
+        # Month Tokens
         months = [f'[MONTH_{i}]' for i in range(1, 13)]
         custom_tokens.extend(months)
 
@@ -36,10 +36,18 @@ class RecformerTokenizer(LongformerTokenizer):
         weekdays = [f'[WEEKDAY_{i}]' for i in range(0, 7)]  # 0=Monday, 6=Sunday
         custom_tokens.extend(weekdays)
 
-        #Add all custom tokens to the tokenizer
-        tokenizer.add_tokens(custom_tokens)
+        # Add all custom tokens to the tokenizer
+        num_added_tokens = tokenizer.add_tokens(custom_tokens, special_tokens=True)
+        print(f"Added {num_added_tokens} custom tokens")
+        
+        # Verify the tokens were added correctly
+        # for token in custom_tokens[:15]:  # Check first 15 tokens
+        #     token_id = tokenizer.convert_tokens_to_ids(token)  # Single token, not list
+        #     converted_back = tokenizer.convert_ids_to_tokens(token_id)  # Use convert_ids_to_tokens
+        #     print(f"Token: {token}, ID: {token_id}, Converted back: {converted_back}")
 
         return tokenizer
+
         
     def __call__(self, items, pad_to_max=False, return_tensor=False):
         '''
@@ -65,9 +73,6 @@ class RecformerTokenizer(LongformerTokenizer):
                 inputs[k] = torch.LongTensor(v)
 
         return inputs
-
-    def item_tokenize(self, text):
-        return self.convert_tokens_to_ids(self.tokenize(text))
     
     def get_amount_token(self, amount):
         """Convert amount to appropriate token"""
@@ -321,48 +326,129 @@ if __name__ == "__main__":
     with open('/Users/Nora_Hallqvist/Code/RecFormer/transactional_data_process/pretrain_data/meta_data.json', 'r') as f:
         data = json.load(f)
 
-    first_key = next(iter(data))
-    transactions = [data[first_key]]
-    print(transactions)
-
-    
-
-    # transactions = [
-    #     {
-    #         'amount': 1,
-    #         'month': 3,
-    #         'day': 15,
-    #         'weekday': 2,
-    #         'merchant': 'Coffee shop purchase'
-    #     },
-    #     {
-    #         'amount': 4000,
-    #         'month': 3,
-    #         'day': 14,
-    #         'weekday': 1,
-    #         'merchant': 'ATM withdrawal'
-    #     }
-    # ]
-    
-    # Encode the transactions
+    transactions = list(data.values())
+    # # Encode all transactions
     encoded = tokenizer(transactions)
-    print("Encoded transactions:", encoded)
-    
-    # Check vocabulary size after adding custom tokens
-    print(f"Vocabulary size: {len(tokenizer)}")
-    
-    # Test individual token conversion
-    print("Month token:", tokenizer.get_month_token(3))
-    print("Month token:", tokenizer.get_day_token(3))
 
+
+    print("Encoded transactions shape:", len(encoded["input_ids"]))
+    none_tokens_info = []
 
     input_ids = encoded["input_ids"]
-    # id = tokenizer.item_tokenize('[AMOUNT_0_300]')
-    # print("Amount token:", tokenizer.convert_ids_to_tokens(id))
-    for i in input_ids:
-        t = tokenizer.convert_ids_to_tokens(i)
-        print(t)
+    # print(input_ids)
+
+
+    tokens_list = []
+    for transaction_idx, token_id in enumerate(input_ids):
+        token = tokenizer.convert_ids_to_tokens([token_id])
+        tokens_list.append(token[0])
+    print(tokens_list)
+        
+    
+    # tokens_list = []
+    # for transaction_idx, token_id in enumerate(input_ids):
+    #     token = tokenizer._convert_id_to_token(token_id)
+    #     tokens_list.append(token)
+    # print(tokens_list)
+        
+            
+    
+        # for token_idx, (token_id, token) in enumerate(zip(token_ids, tokens)):
+        #     if token is None:
+        #         none_tokens_info.append({
+        #             'transaction_idx': transaction_idx,
+        #             'token_idx': token_idx,
+        #             'token_id': token_id,
+        #             'original_transaction': transactions[transaction_idx]
+        #         })
+            # Print tokens for this transaction (optional - remove if too verbose)
+        # print(f"Transaction {transaction_idx}: {tokens}")
+
+    # # Summary of None tokens
+    # print(f"\nFound {len(none_tokens_info)} None tokens:")
+    # for info in none_tokens_info:
+    #     print(f"Transaction {info['transaction_idx']}, Token {info['token_idx']}: "
+    #         f"ID {info['token_id']} -> None")
+    #     print(f"  Original transaction: {info['original_transaction']}")
+    #     print()
+
+    # Alternative approach: Check each token ID in the vocabulary
+    # print("Checking token IDs that return None:")
+    # all_token_ids = set()
+    # for token_ids in input_ids:
+    #     all_token_ids.update(token_ids)
+
+    # none_token_ids = []
+    # for token_id in sorted(all_token_ids):
+    #     token = tokenizer.convert_ids_to_tokens([token_id])[0]
+    #     if token is None:
+    #         none_token_ids.append(token_id)
+
+    # print(f"Token IDs that return None: {none_token_ids}")
+
+    # # If you want to see the original strings that produced these None tokens,
+    # # you might need to decode them differently or check the tokenizer's vocabulary
+    # for token_id in none_token_ids:
+    #     print(f"Token ID {token_id} -> None (vocab size: {len(tokenizer)})")
+
+    
+    # # print(transactions)
+    
+    # # # Encode the transactions
+    # # encoded = tokenizer(transactions)
+    # # print("Encoded transactions:", encoded)
+    
+    # # # Check vocabulary size after adding custom tokens
+    # # print(f"Vocabulary size: {len(tokenizer)}")
+    
+    # # # Test individual token conversion
+    # # print("Month token:", tokenizer.get_month_token(3))
+    # # print("Month token:", tokenizer.get_day_token(3))
+
+
+    # # input_ids = encoded["input_ids"]
+    # # # id = tokenizer.item_tokenize('[AMOUNT_0_300]')
+    # # # print("Amount token:", tokenizer.convert_ids_to_tokens(id))
+    # # for i in input_ids:
+    # #     t = tokenizer.convert_ids_to_tokens(i)
+    # #     print(t)
+
+
+    # # def debug_tokenizer(tokenizer):
+    # #     """Debug function to check tokenizer state"""
+    # #     print("=== Tokenizer Debug Info ===")
+    # #     print(f"Vocab size: {len(tokenizer)}")
+        
+    # #     # Check if custom tokens exist
+    # #     test_tokens = ['[AMOUNT_0_300]', '[MONTH_1]', '[DAY_1]', '[AMOUNT_30000_PLUS]', 'hello']
+    # #     for token in test_tokens:
+    # #         if token in tokenizer.get_vocab():
+    # #             token_id = tokenizer.convert_tokens_to_ids([token])[0]
+    # #             print(f"✓ '{token}' -> ID: {token_id}")
+    # #         else:
+    # #             print(f"✗ '{token}' NOT FOUND in vocabulary")
+        
+    # #     print(f"Total custom tokens that should exist: {len(test_tokens)}")
+    # #     return
+    
+    # # debug_tokenizer(tokenizer)
 
 
 
 
+    # # transactions = [
+    # #     {
+    # #         'amount': 1,
+    # #         'month': 3,
+    # #         'day': 15,
+    # #         'weekday': 2,
+    # #         'merchant': 'Coffee shop purchase'
+    # #     },
+    # #     {
+    # #         'amount': 4000,
+    # #         'month': 3,
+    # #         'day': 14,
+    # #         'weekday': 1,
+    # #         'merchant': 'ATM withdrawal'
+    # #     }
+    # # ]

@@ -65,6 +65,7 @@ def main():
 
     # global tokenizer_glb
     print(f'Using tokenizer tokenizer_glb: {tokenizer}')
+    print(f'Tokenizer vocabulary size: {len(tokenizer)}')
 
     # preprocess corpus
     path_corpus = Path(args.item_attr_file)
@@ -113,16 +114,141 @@ def main():
                             batch_size=args.batch_size, 
                             collate_fn=dev_data.collate_fn,
                             num_workers=args.dataloader_num_workers)
+        
+    # pytorch_model = RecformerForPretraining(config)
+    # print(f"Model created with vocab size: {pytorch_model.longformer.embeddings.word_embeddings.num_embeddings}")
     
+    # # Load the checkpoint first
+    # checkpoint = torch.load(args.longformer_ckpt)
+    # old_vocab_size = checkpoint['longformer.embeddings.word_embeddings.weight'].shape[0]
+    # new_vocab_size = config.vocab_size
     
-    pytorch_model = RecformerForPretraining(config)
-    pytorch_model.load_state_dict(torch.load(args.longformer_ckpt))
+    # print(f"Old vocab size: {old_vocab_size}, New vocab size: {new_vocab_size}")
+    
+    # if old_vocab_size != new_vocab_size:
+    #     print("Resizing vocabulary-dependent parameters...")
+        
+    #     # Resize word embeddings
+    #     old_word_embeddings = checkpoint['longformer.embeddings.word_embeddings.weight']
+    #     new_word_embeddings = torch.zeros(new_vocab_size, old_word_embeddings.shape[1])
+    #     new_word_embeddings[:old_vocab_size] = old_word_embeddings
+        
+    #     # Initialize new embeddings with small random values based on existing embeddings
+    #     if new_vocab_size > old_vocab_size:
+    #         mean = old_word_embeddings.mean(dim=0)
+    #         std = old_word_embeddings.std(dim=0)
+    #         num_new_tokens = new_vocab_size - old_vocab_size
+    #         new_embeddings = torch.normal(
+    #             mean.unsqueeze(0).expand(num_new_tokens, -1), 
+    #             std.unsqueeze(0).expand(num_new_tokens, -1) * 0.02
+    #         )
+    #         new_word_embeddings[old_vocab_size:] = new_embeddings
+        
+    #     checkpoint['longformer.embeddings.word_embeddings.weight'] = new_word_embeddings
+        
+    #     # Resize LM head parameters if they exist
+    #     if 'lm_head.decoder.weight' in checkpoint:
+    #         old_lm_weight = checkpoint['lm_head.decoder.weight']
+    #         new_lm_weight = torch.zeros(new_vocab_size, old_lm_weight.shape[1])
+    #         new_lm_weight[:old_vocab_size] = old_lm_weight
+            
+    #         # Initialize new LM head weights (usually tied to embeddings)
+    #         if new_vocab_size > old_vocab_size:
+    #             new_lm_weight[old_vocab_size:] = new_embeddings
+            
+    #         checkpoint['lm_head.decoder.weight'] = new_lm_weight
+        
+    #     if 'lm_head.bias' in checkpoint:
+    #         old_lm_bias = checkpoint['lm_head.bias']
+    #         new_lm_bias = torch.zeros(new_vocab_size)
+    #         new_lm_bias[:old_vocab_size] = old_lm_bias
+    #         # New bias tokens initialized to 0 (default)
+    #         checkpoint['lm_head.bias'] = new_lm_bias
+        
+    #     if 'lm_head.decoder.bias' in checkpoint:
+    #         old_decoder_bias = checkpoint['lm_head.decoder.bias']
+    #         new_decoder_bias = torch.zeros(new_vocab_size)
+    #         new_decoder_bias[:old_vocab_size] = old_decoder_bias
+    #         # New decoder bias tokens initialized to 0 (default)
+    #         checkpoint['lm_head.decoder.bias'] = new_decoder_bias
+    
+    # # Now resize the model's embeddings to match
+    # pytorch_model.resize_token_embeddings(config.vocab_size)
+    # print(f"Embeddings resized to: {pytorch_model.longformer.embeddings.word_embeddings.num_embeddings}")
+    
+    # # Load the modified checkpoint
+    # missing_keys, unexpected_keys = pytorch_model.load_state_dict(checkpoint, strict=False)
+    # print(f"Missing keys: {missing_keys}")
+    # print(f"Unexpected keys: {unexpected_keys}")
+    
+    # pytorch_model = RecformerForPretraining(config)
+    # pytorch_model.load_state_dict(torch.load(args.longformer_ckpt), strict=False)
+    # old_vocab_size = config.vocab_size
+    # new_vocab_size = len(tokenizer)
 
+    # print(f"Original vocab size: {old_vocab_size}")
+    # print(f"New vocab size: {new_vocab_size}")
+    # print(f"Added {new_vocab_size - old_vocab_size} custom tokens")
+
+    # # 5. Resize token embeddings using inherited method
+    # print("Resizing token embeddings...")
+    # pytorch_model.longformer.resize_token_embeddings(new_vocab_size)
+    
+    # # 6. Update config vocab size
+    # config.vocab_size = new_vocab_size
+    # pytorch_model.config.vocab_size = new_vocab_size
+
+    old_vocab_size = config.vocab_size
+    new_vocab_size = len(tokenizer)
+    print(f"Original vocab size: {old_vocab_size}")
+    print(f"New vocab size: {new_vocab_size}")
+    print(f"Added {new_vocab_size - old_vocab_size} custom tokens")
+
+    # 1. Create model with original config
+    pytorch_model = RecformerForPretraining(config)
+
+    # 2. Load pretrained weights first
+    pytorch_model.load_state_dict(torch.load(args.longformer_ckpt), strict=True)
+
+    # 3. Now resize token embeddings (this will preserve old weights and initialize new ones)
+    print("Resizing token embeddings...")
+    pytorch_model.longformer.resize_token_embeddings(new_vocab_size)
+
+    # 4. The resize_token_embeddings method should handle the LM head automatically
+    # But if it doesn't, manually resize it:
+    if hasattr(pytorch_model, 'lm_head'):
+        old_lm_head_weight = pytorch_model.lm_head.decoder.weight.data
+        old_lm_head_bias = pytorch_model.lm_head.decoder.bias.data if pytorch_model.lm_head.decoder.bias is not None else None
+        old_lm_bias = pytorch_model.lm_head.bias.data if pytorch_model.lm_head.bias is not None else None
+        
+        # Create new linear layer
+        pytorch_model.lm_head.decoder = torch.nn.Linear(
+            pytorch_model.lm_head.decoder.in_features,
+            new_vocab_size,
+            bias=pytorch_model.lm_head.decoder.bias is not None
+        )
+        
+        if hasattr(pytorch_model.lm_head, 'bias') and pytorch_model.lm_head.bias is not None:
+            pytorch_model.lm_head.bias = torch.nn.Parameter(torch.zeros(new_vocab_size))
+        
+        # Copy old weights
+        with torch.no_grad():
+            pytorch_model.lm_head.decoder.weight[:old_vocab_size] = old_lm_head_weight
+            if old_lm_head_bias is not None:
+                pytorch_model.lm_head.decoder.bias[:old_vocab_size] = old_lm_head_bias
+            if old_lm_bias is not None:
+                pytorch_model.lm_head.bias[:old_vocab_size] = old_lm_bias
+
+    # 5. Update config
+    config.vocab_size = new_vocab_size
+    pytorch_model.config.vocab_size = new_vocab_size
+
+    print("Model loaded and resized successfully!")
 
     if args.fix_word_embedding:
         print('Fix word embeddings.')
         for param in pytorch_model.longformer.embeddings.word_embeddings.parameters():
-            param.requires_grad = False
+            param.requires_grad = True
 
     model = LitWrapper(pytorch_model, learning_rate=args.learning_rate)
 

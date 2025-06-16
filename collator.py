@@ -99,8 +99,9 @@ class PretrainDataCollatorWithPadding:
         for e in flat_features:
             ref_tokens = []
             for id in e["input_ids"]:
-                token = self.tokenizer._convert_id_to_token(id)
-                ref_tokens.append(token)
+                #changed from _convert_id_to_token to convert_ids_to_tokens to work with the added tokens
+                token = self.tokenizer.convert_ids_to_tokens([id])
+                ref_tokens.append(token[0])
 
             mask_labels.append(self._whole_word_mask(ref_tokens))
 
