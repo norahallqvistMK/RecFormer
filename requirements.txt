@@ -9,3 +9,6 @@ seaborn
 langchain_openai==0.3.2
 python-dotenv==1.0.1
 umap-learn
+numpy<2
+pydantic<2
+tensorboard
