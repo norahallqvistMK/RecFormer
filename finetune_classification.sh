@@ -5,3 +5,4 @@ python finetune_classification.py \
     --batch_size 1 \
     --device 1 \
     --fp16 \
+    --fix_word_embedding

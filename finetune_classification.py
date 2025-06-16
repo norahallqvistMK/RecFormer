@@ -438,6 +438,12 @@ def main():
     model.load_state_dict(pretrain_ckpt, strict=False)
     model.to(args.device)
 
+
+    if args.fix_word_embedding:
+        print('Fix word embeddings.')
+        for param in model.longformer.embeddings.word_embeddings.parameters():
+            param.requires_grad = False
+
     #encode all the items (tokenise the transaction meta data)
     path_item_embeddings = dir_preprocess / f'item_embeddings_{path_corpus.name}'
     if path_item_embeddings.exists():
